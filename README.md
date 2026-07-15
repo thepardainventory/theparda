@@ -2,7 +2,11 @@
 
 A phone-friendly inventory portal for a curtain store. It includes a dashboard, stock-in/out records, SKU checking, low-stock alerts, product search, and transaction history.
 
-> Status: the committed frontend is a **demo using sample data**. It does not yet load or save live Supabase data. Do not use it to manage production inventory until the data/auth integration is completed.
+> Status: **Live with Supabase.** The frontend supports two login modes on the same screen:
+> - **Owner** (email + password) — full access including adding products and managing the staff roster. Requires a `profiles` row with `role = 'admin'` in the database.
+> - **Staff** (username only) — signs in via Supabase Anonymous Auth, then validates the entered name against the `public.staff` table (case-insensitive, active members only). Staff can record stock updates and view all inventory data, but cannot add products or manage users. Attribution on all stock movements is set to the validated staff name stored in `localStorage`.
+>
+> Admin-only controls (Add product, Users) are gated by `profiles.role` and enforced by Postgres RLS. The app is ready for production inventory use once the owner Auth user and admin profile row have been created (see setup steps below).
 
 ## Run locally
 
@@ -11,7 +15,7 @@ npm install
 npm run dev
 ```
 
-The interface opens with sample data so it can be reviewed immediately. The next integration step is to connect the supplied Supabase schema to the UI data layer and enforce Supabase Auth for admin-only controls.
+The interface connects to Supabase on startup. If the environment variables are not set the app will display a configuration error instead of a login screen. Ensure `.env.local` contains both `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` before running.
 
 ## Supabase setup
 
