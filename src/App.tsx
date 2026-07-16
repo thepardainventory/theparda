@@ -1382,10 +1382,7 @@ function Dashboard({
         >
           <div className="metric-icon metric-icon-in">↓</div>
           <div>
-            <span>Stock In</span>
-            <strong className="metric-action-label">
-              {activeAction === 'stock_in' ? 'Close form' : 'Record arrival'}
-            </strong>
+            <strong className="metric-action-label">Stock In</strong>
           </div>
         </div>
 
@@ -1406,10 +1403,7 @@ function Dashboard({
         >
           <div className="metric-icon metric-icon-out">↑</div>
           <div>
-            <span>Stock Out</span>
-            <strong className="metric-action-label">
-              {activeAction === 'stock_out' ? 'Close form' : 'Record removal'}
-            </strong>
+            <strong className="metric-action-label">Stock Out</strong>
           </div>
         </div>
 
