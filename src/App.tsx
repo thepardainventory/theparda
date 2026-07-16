@@ -92,7 +92,7 @@ const fmtDate = (iso: string) =>
   }).format(new Date(iso))
 
 /**
- * Format a size value for display, appending " in" as the inches suffix.
+ * Format a size value for display, appending " inch" as the inches suffix.
  * Guards against double-appending if the value already ends with "in" or "inch".
  * Returns "—" for empty/blank values.
  */
@@ -100,7 +100,7 @@ const sizeLabel = (size: string): string => {
   if (!size || !size.trim()) return '—'
   const trimmed = size.trim()
   if (/\bin(ch(es?)?)?\s*$/i.test(trimmed)) return trimmed
-  return `${trimmed} in`
+  return `${trimmed} inch`
 }
 
 /** Display identity for a product: "name · size (in) · category" */
