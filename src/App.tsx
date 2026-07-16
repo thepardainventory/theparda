@@ -1,8 +1,10 @@
 import {
   type FormEvent,
+  type KeyboardEvent,
   type ReactNode,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react'
 import type { Session } from '@supabase/supabase-js'
@@ -14,12 +16,9 @@ import './App.css'
 type DbProduct = {
   id: string
   name: string
-  sku: string
+  size: string
   category: string
-  color: string
   quantity: number
-  minimum_stock_level: number
-  notes: string | null
   updated_at: string
   updated_by: string
   created_at: string
@@ -39,9 +38,8 @@ type DbTransaction = {
   movement_type: 'stock_in' | 'stock_out'
   quantity: number
   updated_by: string
-  remarks: string | null
   created_at: string
-  products: { name: string; sku: string } | null
+  products: { name: string; size: string; category: string } | null
 }
 
 type DbStaff = {
@@ -67,11 +65,9 @@ type ProductRack = {
 type Product = {
   id: string
   name: string
-  sku: string
+  size: string
   category: string
-  color: string
   quantity: number
-  minimum: number
   updatedAt: string
   updatedBy: string
   racks: ProductRack[]
@@ -80,12 +76,10 @@ type Product = {
 type StockUpdate = {
   id: string
   product: string
-  sku: string
   rack: string
   type: 'Stock In' | 'Stock Out'
   quantity: number
   by: string
-  remarks: string
   date: string
 }
 
@@ -96,6 +90,22 @@ const fmtDate = (iso: string) =>
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(iso))
+
+/**
+ * Format a size value for display, appending " in" as the inches suffix.
+ * Guards against double-appending if the value already ends with "in" or "inch".
+ * Returns "—" for empty/blank values.
+ */
+const sizeLabel = (size: string): string => {
+  if (!size || !size.trim()) return '—'
+  const trimmed = size.trim()
+  if (/\bin(ch(es?)?)?\s*$/i.test(trimmed)) return trimmed
+  return `${trimmed} in`
+}
+
+/** Display identity for a product: "name · size (in) · category" */
+const productLabel = (name: string, size: string, category: string) =>
+  `${name} · ${sizeLabel(size)} · ${category}`
 
 const STAFF_NAME_KEY = 'parda_staff_name'
 
@@ -127,11 +137,9 @@ function toProduct(row: DbProduct, racks: DbProductRack[]): Product {
   return {
     id: row.id,
     name: row.name,
-    sku: row.sku,
+    size: row.size,
     category: row.category,
-    color: row.color,
     quantity: row.quantity,
-    minimum: row.minimum_stock_level,
     updatedAt: fmtDate(row.updated_at),
     updatedBy: row.updated_by,
     racks: racks.map((r) => ({
@@ -143,15 +151,17 @@ function toProduct(row: DbProduct, racks: DbProductRack[]): Product {
 }
 
 function toStockUpdate(row: DbTransaction): StockUpdate {
+  const p = row.products
+  const productDisplay = p
+    ? productLabel(p.name, p.size, p.category)
+    : '(deleted)'
   return {
     id: row.id,
-    product: row.products?.name ?? '(deleted)',
-    sku: row.products?.sku ?? '—',
+    product: productDisplay,
     rack: row.rack_number,
     type: row.movement_type === 'stock_in' ? 'Stock In' : 'Stock Out',
     quantity: row.quantity,
     by: row.updated_by,
-    remarks: row.remarks ?? '',
     date: fmtDate(row.created_at),
   }
 }
@@ -178,14 +188,12 @@ function LoginScreen({ onNotice }: { onNotice: (msg: string) => void }) {
 
     setLoading(true)
 
-    // Step 1: sign in anonymously
     const { error: anonError } = await supabase.auth.signInAnonymously()
     if (anonError) {
       setLoading(false)
       return onNotice(anonError.message)
     }
 
-    // Step 2: validate username against staff roster (case-insensitive)
     const { data: staffRows, error: staffError } = await supabase
       .from('staff')
       .select('name, active')
@@ -197,7 +205,9 @@ function LoginScreen({ onNotice }: { onNotice: (msg: string) => void }) {
       return onNotice(staffError.message)
     }
 
-    const activeRow = staffRows?.find((s: { name: string; active: boolean }) => s.active === true)
+    const activeRow = staffRows?.find(
+      (s: { name: string; active: boolean }) => s.active === true,
+    )
 
     if (!activeRow) {
       await supabase.auth.signOut()
@@ -207,7 +217,6 @@ function LoginScreen({ onNotice }: { onNotice: (msg: string) => void }) {
       )
     }
 
-    // Step 3: persist the canonical staff name and proceed
     saveStoredStaffName(activeRow.name)
     setLoading(false)
   }
@@ -243,7 +252,6 @@ function LoginScreen({ onNotice }: { onNotice: (msg: string) => void }) {
         </div>
         <h2 className="login-heading">Sign in to continue</h2>
 
-        {/* Sign-in-as selector */}
         <div className="login-mode-row">
           <label htmlFor="login-mode-select" className="login-mode-label">
             Sign in as
@@ -260,7 +268,12 @@ function LoginScreen({ onNotice }: { onNotice: (msg: string) => void }) {
         </div>
 
         {loginMode === 'staff' ? (
-          <form className="form" onSubmit={(e) => { void handleStaffLogin(e) }}>
+          <form
+            className="form"
+            onSubmit={(e) => {
+              void handleStaffLogin(e)
+            }}
+          >
             <label>
               Username
               <input
@@ -280,7 +293,12 @@ function LoginScreen({ onNotice }: { onNotice: (msg: string) => void }) {
             </button>
           </form>
         ) : (
-          <form className="form" onSubmit={(e) => { void handleOwnerLogin(e) }}>
+          <form
+            className="form"
+            onSubmit={(e) => {
+              void handleOwnerLogin(e)
+            }}
+          >
             <label>
               Email
               <input
@@ -317,7 +335,13 @@ function LoginScreen({ onNotice }: { onNotice: (msg: string) => void }) {
 
 // ── Main app ───────────────────────────────────────────────────────────────────
 
-type PageKey = 'dashboard' | 'products' | 'history' | 'users' | 'add-product' | 'all-products'
+type PageKey =
+  | 'dashboard'
+  | 'products'
+  | 'history'
+  | 'users'
+  | 'add-product'
+  | 'all-products'
 
 function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined)
@@ -329,7 +353,6 @@ function App() {
   const [fetchError, setFetchError] = useState('')
   const [page, setPage] = useState<PageKey>('dashboard')
   const [search, setSearch] = useState('')
-  const [showUpdate, setShowUpdate] = useState(false)
   const [notice, setNotice] = useState('')
 
   // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -374,8 +397,6 @@ function App() {
 
   // ── Identity resolution ───────────────────────────────────────────────────────
 
-  // isAdmin: profile exists and role === 'admin'
-  // identityName: profile.display_name for admin, localStorage staff name for anon staff
   const isAdmin = profile?.role === 'admin'
   const identityName: string = isAdmin
     ? (profile?.display_name ?? session?.user?.email ?? 'Owner')
@@ -393,22 +414,30 @@ function App() {
       supabase.from('product_racks').select('*'),
       supabase
         .from('stock_transactions')
-        .select('*, products(name, sku)')
+        .select('*, products(name, size, category)')
         .order('created_at', { ascending: false })
         .limit(200),
-      supabase
-        .from('staff')
-        .select('*')
-        .eq('active', true)
-        .order('name'),
+      supabase.from('staff').select('*').eq('active', true).order('name'),
     ])
 
     setLoading(false)
 
-    if (prodRes.error) { setFetchError(prodRes.error.message); return }
-    if (racksRes.error) { setFetchError(racksRes.error.message); return }
-    if (txRes.error) { setFetchError(txRes.error.message); return }
-    if (staffRes.error) { setFetchError(staffRes.error.message); return }
+    if (prodRes.error) {
+      setFetchError(prodRes.error.message)
+      return
+    }
+    if (racksRes.error) {
+      setFetchError(racksRes.error.message)
+      return
+    }
+    if (txRes.error) {
+      setFetchError(txRes.error.message)
+      return
+    }
+    if (staffRes.error) {
+      setFetchError(staffRes.error.message)
+      return
+    }
 
     const racksData = racksRes.data as DbProductRack[]
     const racksByProduct: Record<string, DbProductRack[]> = {}
@@ -434,10 +463,8 @@ function App() {
 
   // ── Derived ───────────────────────────────────────────────────────────────────
 
-  const lowStock = products.filter((p) => p.quantity <= p.minimum)
-  const totalStock = products.reduce((sum, p) => sum + p.quantity, 0)
   const filtered = products.filter((p) =>
-    `${p.name} ${p.sku} ${p.category}`
+    `${p.name} ${p.size} ${p.category}`
       .toLowerCase()
       .includes(search.toLowerCase()),
   )
@@ -450,97 +477,49 @@ function App() {
     await supabase.auth.signOut()
   }
 
-  // ── Record stock update ───────────────────────────────────────────────────────
-
-  const recordStockUpdate = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!supabase) return
-
-    const data = new FormData(event.currentTarget)
-    const productId = String(data.get('product'))
-    const movementType = String(data.get('type')) as 'stock_in' | 'stock_out'
-    const quantity = Number(data.get('quantity'))
-    const rawRack = String(data.get('rack') ?? '').trim()
-    const remarks = String(data.get('remarks') || '') || null
-
-    if (!rawRack) {
-      setNotice('Enter a rack number.')
-      return
-    }
-    if (!Number.isInteger(quantity) || quantity <= 0) {
-      setNotice('Enter a valid quantity.')
-      return
-    }
-
-    // Client-side guard for stock_out: check specific rack quantity
-    const product = products.find((p) => p.id === productId)
-    if (product && movementType === 'stock_out') {
-      const rackEntry = product.racks.find((r) => r.rackNumber === rawRack)
-      if (!rackEntry) {
-        setNotice(
-          `No stock exists on rack ${rawRack} for ${product.name}. Use a rack that has stock.`,
-        )
-        return
-      }
-      if (quantity > rackEntry.quantity) {
-        setNotice(
-          `Only ${rackEntry.quantity} items are available on rack ${rawRack} for ${product.name}.`,
-        )
-        return
-      }
-    }
-
-    const { error } = await supabase.from('stock_transactions').insert({
-      product_id: productId,
-      rack_number: rawRack,
-      movement_type: movementType,
-      quantity,
-      updated_by: identityName,
-      remarks,
-    })
-
-    if (error) {
-      setNotice(error.message)
-      return
-    }
-
-    setShowUpdate(false)
-    setNotice(
-      `${movementType === 'stock_in' ? 'Stock In' : 'Stock Out'} recorded successfully.`,
-    )
-    await fetchAll()
-  }
-
   // ── Add product ───────────────────────────────────────────────────────────────
 
   const addProduct = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!supabase) return
     const data = new FormData(event.currentTarget)
-    const sku = String(data.get('sku')).trim().toUpperCase()
-    if (products.some((p) => p.sku === sku)) {
-      setNotice('That SKU already exists. Use a unique SKU.')
-      return
-    }
+    const name = String(data.get('name')).trim()
+    const size = String(data.get('size')).trim()
+    const category = String(data.get('category')).trim()
     const openingQty = Number(data.get('opening_qty'))
     const openingRack = String(data.get('opening_rack') ?? '').trim()
+
+    if (!name || !size || !category) {
+      setNotice('Product name, size, and category are required.')
+      return
+    }
+    const sizeNum = Number(size)
+    if (!size || !Number.isInteger(sizeNum) || sizeNum < 1) {
+      setNotice('Size must be a positive whole number (in inches).')
+      return
+    }
 
     const { data: insertedRows, error } = await supabase
       .from('products')
       .insert({
-        name: String(data.get('name')),
-        sku,
-        category: String(data.get('category')),
-        color: String(data.get('color')),
-        minimum_stock_level: Number(data.get('minimum')),
-        notes: String(data.get('notes') || '') || null,
+        name,
+        size,
+        category,
         updated_by: identityName,
       })
       .select('id')
       .single()
 
     if (error || !insertedRows) {
-      setNotice(error?.message ?? 'Failed to add product.')
+      const msg = error?.message ?? 'Failed to add product.'
+      // unique (name, size, category) violation
+      if (error?.code === '23505' || msg.includes('unique')) {
+        setNotice(
+          `A product "${name} · ${size} · ${category}" already exists.`,
+        )
+      } else {
+        setNotice(msg)
+      }
       return
     }
 
@@ -555,7 +534,6 @@ function App() {
           movement_type: 'stock_in',
           quantity: openingQty,
           updated_by: identityName,
-          remarks: 'Opening stock',
         })
       if (txError) {
         setNotice(`Product added, but opening stock failed: ${txError.message}`)
@@ -578,29 +556,31 @@ function App() {
       return (
         <UsersPage
           staff={staff}
-          onRefresh={() => { void fetchAll() }}
+          onRefresh={() => {
+            void fetchAll()
+          }}
           onNotice={setNotice}
         />
       )
     if (page === 'products')
       return (
-        <Products
-          products={filtered}
-          search={search}
-          setSearch={setSearch}
-        />
+        <Products products={filtered} search={search} setSearch={setSearch} />
       )
     if (page === 'add-product')
       return (
         <AddProductPage
-          onSubmit={(e) => { void addProduct(e) }}
+          onSubmit={(e) => {
+            void addProduct(e)
+          }}
         />
       )
     if (page === 'all-products')
       return (
         <AllProductsPage
           products={products}
-          onRefresh={() => { void fetchAll() }}
+          onRefresh={() => {
+            void fetchAll()
+          }}
           onNotice={setNotice}
         />
       )
@@ -608,13 +588,14 @@ function App() {
       <Dashboard
         products={products}
         stockUpdates={stockUpdates}
-        lowStock={lowStock}
-        totalStock={totalStock}
-        onViewLow={() => setPage('products')}
-        onViewHistory={() => setPage('history')}
+        identityName={identityName}
+        onRefresh={() => {
+          void fetchAll()
+        }}
+        onNotice={setNotice}
       />
     )
-  }, [page, products, stockUpdates, filtered, search, lowStock, totalStock, staff]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [page, products, stockUpdates, filtered, search, staff]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Render guards ─────────────────────────────────────────────────────────────
 
@@ -663,7 +644,7 @@ function App() {
     page === 'dashboard'
       ? 'Here is the latest overview of your stock.'
       : page === 'products'
-        ? 'Find and check every SKU in your store.'
+        ? 'Find and check every product in your store.'
         : page === 'history'
           ? 'A complete record of every stock update.'
           : page === 'users'
@@ -736,7 +717,9 @@ function App() {
           </div>
           <button
             className="signout-btn"
-            onClick={() => { void handleSignOut() }}
+            onClick={() => {
+              void handleSignOut()
+            }}
             aria-label="Sign out"
           >
             ⎋ <span>Sign out</span>
@@ -750,16 +733,6 @@ function App() {
             <p className="eyebrow">CURTAIN STORE · INVENTORY</p>
             <h1>{pageTitle}</h1>
             <p className="subhead">{pageSubhead}</p>
-          </div>
-          <div className="header-actions">
-            <button
-              className="button secondary"
-              onClick={() => {
-                setShowUpdate(true)
-              }}
-            >
-              ↕ Stock Update
-            </button>
           </div>
         </header>
 
@@ -793,17 +766,6 @@ function App() {
 
         {content}
       </main>
-
-      {/* Stock Update modal */}
-      {showUpdate && (
-        <StockUpdateModal
-          products={products}
-          onClose={() => setShowUpdate(false)}
-          onSubmit={(e) => {
-            void recordStockUpdate(e)
-          }}
-        />
-      )}
     </div>
   )
 }
@@ -812,11 +774,8 @@ function App() {
 
 type EditDraft = {
   name: string
-  sku: string
+  size: string
   category: string
-  color: string
-  minimum_stock_level: string
-  notes: string
 }
 
 function AllProductsPage({
@@ -831,31 +790,13 @@ function AllProductsPage({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState<EditDraft>({
     name: '',
-    sku: '',
+    size: '',
     category: '',
-    color: '',
-    minimum_stock_level: '0',
-    notes: '',
   })
   const [saving, setSaving] = useState(false)
 
-  // We need notes from the original DB row, but Product doesn't carry notes.
-  // We fetch it fresh when the modal opens so we always show the stored notes.
-  const openEditWithNotes = async (p: Product) => {
-    if (!supabase) return
-    const { data, error } = await supabase
-      .from('products')
-      .select('notes')
-      .eq('id', p.id)
-      .single()
-    setDraft({
-      name: p.name,
-      sku: p.sku,
-      category: p.category,
-      color: p.color,
-      minimum_stock_level: String(p.minimum),
-      notes: error || !data ? '' : ((data.notes as string | null) ?? ''),
-    })
+  const openEdit = (p: Product) => {
+    setDraft({ name: p.name, size: p.size, category: p.category })
     setEditingId(p.id)
   }
 
@@ -868,30 +809,42 @@ function AllProductsPage({
     if (!supabase || !editingId) return
 
     const name = draft.name.trim()
-    const sku = draft.sku.trim().toUpperCase()
+    const size = draft.size.trim()
     const category = draft.category.trim()
-    const color = draft.color.trim()
-    const minimum_stock_level = parseInt(draft.minimum_stock_level, 10)
-    const notes = draft.notes.trim() || null
 
-    if (!name) { onNotice('Product name is required.'); return }
-    if (!sku) { onNotice('SKU is required.'); return }
-    if (!category) { onNotice('Category is required.'); return }
-    if (!color) { onNotice('Color is required.'); return }
-    if (!Number.isInteger(minimum_stock_level) || minimum_stock_level < 0) {
-      onNotice('Minimum stock level must be a whole number 0 or greater.')
+    if (!name) {
+      onNotice('Product name is required.')
+      return
+    }
+    if (!size) {
+      onNotice('Size is required.')
+      return
+    }
+    const sizeNum = Number(size)
+    if (!Number.isInteger(sizeNum) || sizeNum < 1) {
+      onNotice('Size must be a positive whole number (in inches).')
+      return
+    }
+    if (!category) {
+      onNotice('Category is required.')
       return
     }
 
     setSaving(true)
     const { error } = await supabase
       .from('products')
-      .update({ name, sku, category, color, minimum_stock_level, notes })
+      .update({ name, size, category })
       .eq('id', editingId)
     setSaving(false)
 
     if (error) {
-      onNotice(error.message)
+      if (error.code === '23505' || error.message.includes('unique')) {
+        onNotice(
+          `A product "${name} · ${size} · ${category}" already exists.`,
+        )
+      } else {
+        onNotice(error.message)
+      }
       return
     }
 
@@ -914,11 +867,10 @@ function AllProductsPage({
         <table>
           <thead>
             <tr>
-              <th>Product</th>
-              <th>SKU</th>
-              <th>Category</th>
+              <th>Product name</th>
+              <th>Size</th>
+              <th>Type</th>
               <th>Stock (read-only)</th>
-              <th>Min. stock</th>
               <th>Last updated</th>
               <th>Action</th>
             </tr>
@@ -928,19 +880,13 @@ function AllProductsPage({
               <tr key={p.id}>
                 <td>
                   <b>{p.name}</b>
-                  <span>{p.color}</span>
                 </td>
-                <td>
-                  <code>{p.sku}</code>
-                </td>
+                <td>{sizeLabel(p.size)}</td>
                 <td>{p.category}</td>
                 <td>
-                  <span className={`stock-count ${p.quantity <= p.minimum ? 'low' : ''}`}>
-                    {p.quantity}
-                  </span>
+                  <span className="stock-count">{p.quantity}</span>
                   <span className="stock-min">trigger-managed</span>
                 </td>
-                <td>{p.minimum}</td>
                 <td>
                   {p.updatedAt}
                   <span>by {p.updatedBy}</span>
@@ -948,7 +894,7 @@ function AllProductsPage({
                 <td>
                   <button
                     className="text-button"
-                    onClick={() => { void openEditWithNotes(p) }}
+                    onClick={() => openEdit(p)}
                   >
                     Edit
                   </button>
@@ -958,8 +904,12 @@ function AllProductsPage({
             {products.length === 0 && (
               <tr>
                 <td
-                  colSpan={7}
-                  style={{ textAlign: 'center', color: 'var(--muted)', padding: '28px' }}
+                  colSpan={6}
+                  style={{
+                    textAlign: 'center',
+                    color: 'var(--muted)',
+                    padding: '28px',
+                  }}
                 >
                   No products found.
                 </td>
@@ -970,8 +920,16 @@ function AllProductsPage({
       </div>
 
       {editingId && editingProduct && (
-        <Modal title={`Edit: ${editingProduct.name}`} onClose={closeEdit}>
-          <form className="form" onSubmit={(e) => { void handleSave(e) }}>
+        <Modal
+          title={`Edit: ${productLabel(editingProduct.name, editingProduct.size, editingProduct.category)}`}
+          onClose={closeEdit}
+        >
+          <form
+            className="form"
+            onSubmit={(e) => {
+              void handleSave(e)
+            }}
+          >
             <div className="form-grid">
               <label>
                 Product name
@@ -982,42 +940,26 @@ function AllProductsPage({
                 />
               </label>
               <label>
-                SKU <span>uppercased automatically</span>
+                Size (inches)
                 <input
-                  value={draft.sku}
-                  onChange={(e) =>
-                    setDraft({ ...draft, sku: e.target.value.toUpperCase() })
-                  }
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={draft.size}
+                  onChange={(e) => setDraft({ ...draft, size: e.target.value })}
                   required
+                  placeholder="e.g. 84"
                 />
               </label>
               <label>
                 Category
                 <input
                   value={draft.category}
-                  onChange={(e) => setDraft({ ...draft, category: e.target.value })}
-                  required
-                />
-              </label>
-              <label>
-                Color
-                <input
-                  value={draft.color}
-                  onChange={(e) => setDraft({ ...draft, color: e.target.value })}
-                  required
-                />
-              </label>
-              <label>
-                Minimum stock level
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={draft.minimum_stock_level}
                   onChange={(e) =>
-                    setDraft({ ...draft, minimum_stock_level: e.target.value })
+                    setDraft({ ...draft, category: e.target.value })
                   }
                   required
+                  placeholder="e.g. Blackout"
                 />
               </label>
               <label>
@@ -1029,14 +971,6 @@ function AllProductsPage({
                 />
               </label>
             </div>
-            <label>
-              Notes <span>optional</span>
-              <textarea
-                value={draft.notes}
-                onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
-                placeholder="Any additional details"
-              />
-            </label>
             <div className="all-products-modal-actions">
               <button
                 type="button"
@@ -1078,18 +1012,21 @@ function AddProductPage({
           <div className="form-grid">
             <label>
               Product name
-              <input name="name" required />
+              <input name="name" required placeholder="e.g. Sand" />
             </label>
             <label>
-              SKU
+              Size (inches)
               <input
-                name="sku"
-                placeholder="e.g. VBL-SND-001"
+                name="size"
+                type="number"
+                min="1"
+                step="1"
                 required
+                placeholder="e.g. 84"
               />
             </label>
             <label>
-              Category
+              Category / Type
               <input
                 name="category"
                 placeholder="e.g. Blackout"
@@ -1097,179 +1034,26 @@ function AddProductPage({
               />
             </label>
             <label>
-              Color
-              <input name="color" required />
-            </label>
-            <label>
               Opening rack <span>optional</span>
-              <input
-                name="opening_rack"
-                placeholder="e.g. A-01"
-              />
+              <input name="opening_rack" placeholder="e.g. A-01" />
             </label>
             <label>
               Opening quantity
-              <input name="opening_qty" type="number" min="0" defaultValue="0" required />
-            </label>
-            <label>
-              Minimum stock
-              <input name="minimum" type="number" min="0" required />
+              <input
+                name="opening_qty"
+                type="number"
+                min="0"
+                defaultValue="0"
+                required
+              />
             </label>
           </div>
-          <label>
-            Notes <span>optional</span>
-            <textarea name="notes" placeholder="Any additional details" />
-          </label>
           <button className="button primary" type="submit">
             Add product
           </button>
         </form>
       </div>
     </section>
-  )
-}
-
-// ── StockUpdateModal ───────────────────────────────────────────────────────────
-
-function StockUpdateModal({
-  products,
-  onClose,
-  onSubmit,
-}: {
-  products: Product[]
-  onClose: () => void
-  onSubmit: (e: FormEvent<HTMLFormElement>) => void
-}) {
-  const [selectedProductId, setSelectedProductId] = useState(
-    products[0]?.id ?? '',
-  )
-  const [movementType, setMovementType] = useState<'stock_in' | 'stock_out'>(
-    'stock_in',
-  )
-  const [rackInput, setRackInput] = useState('')
-  const [useNewRack, setUseNewRack] = useState(false)
-
-  const selectedProduct = products.find((p) => p.id === selectedProductId)
-  const racks = selectedProduct?.racks ?? []
-
-  // When product changes, reset rack selection
-  const handleProductChange = (id: string) => {
-    setSelectedProductId(id)
-    setRackInput('')
-    setUseNewRack(false)
-  }
-
-  // For stock_out, only existing racks make sense; for stock_in, new rack is allowed
-  const showNewRackOption = movementType === 'stock_in'
-
-  const effectiveRack =
-    useNewRack || racks.length === 0 ? rackInput : rackInput || (racks[0]?.rackNumber ?? '')
-
-  // Keep rackInput in sync when switching from existing dropdown
-  const handleRackSelect = (value: string) => {
-    if (value === '__new__') {
-      setUseNewRack(true)
-      setRackInput('')
-    } else {
-      setUseNewRack(false)
-      setRackInput(value)
-    }
-  }
-
-  return (
-    <Modal title="Record stock update" onClose={onClose}>
-      <form className="form" onSubmit={onSubmit}>
-        <label>
-          Product
-          <select
-            name="product"
-            required
-            value={selectedProductId}
-            onChange={(e) => handleProductChange(e.target.value)}
-          >
-            {products.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} · {p.sku} ({p.quantity} total)
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <div className="form-grid">
-          <label>
-            Update type
-            <select
-              name="type"
-              value={movementType}
-              onChange={(e) => {
-                setMovementType(e.target.value as 'stock_in' | 'stock_out')
-                setUseNewRack(false)
-                setRackInput(racks[0]?.rackNumber ?? '')
-              }}
-            >
-              <option value="stock_in">Stock In</option>
-              <option value="stock_out">Stock Out</option>
-            </select>
-          </label>
-          <label>
-            Quantity
-            <input name="quantity" type="number" min="1" required />
-          </label>
-        </div>
-
-        <label>
-          Rack
-          {racks.length > 0 && !useNewRack ? (
-            <select
-              value={rackInput || racks[0]?.rackNumber}
-              onChange={(e) => handleRackSelect(e.target.value)}
-            >
-              {racks.map((r) => (
-                <option key={r.id} value={r.rackNumber}>
-                  {r.rackNumber} ({r.quantity} in stock)
-                </option>
-              ))}
-              {showNewRackOption && (
-                <option value="__new__">+ Enter new rack number</option>
-              )}
-            </select>
-          ) : null}
-          {(racks.length === 0 || useNewRack) && (
-            <input
-              placeholder="e.g. A-01"
-              value={rackInput}
-              onChange={(e) => setRackInput(e.target.value)}
-            />
-          )}
-          {useNewRack && (
-            <button
-              type="button"
-              className="rack-cancel-new"
-              onClick={() => {
-                setUseNewRack(false)
-                setRackInput(racks[0]?.rackNumber ?? '')
-              }}
-            >
-              Cancel — use existing rack
-            </button>
-          )}
-        </label>
-
-        {/* Hidden field carries the resolved rack_number */}
-        <input type="hidden" name="rack" value={effectiveRack} />
-
-        <label>
-          Remarks <span>optional</span>
-          <textarea
-            name="remarks"
-            placeholder="e.g. Supplier delivery or order number"
-          />
-        </label>
-        <button className="button primary full" type="submit">
-          Save stock update
-        </button>
-      </form>
-    </Modal>
   )
 }
 
@@ -1289,7 +1073,6 @@ function UsersPage({
   const [addingName, setAddingName] = useState('')
   const [saving, setSaving] = useState(false)
 
-  // Fetch all (including inactive) for display in management page
   const fetchAllStaff = async () => {
     if (!supabase) return
     setLoadingAll(true)
@@ -1298,7 +1081,10 @@ function UsersPage({
       .select('*')
       .order('name')
     setLoadingAll(false)
-    if (error) { onNotice(error.message); return }
+    if (error) {
+      onNotice(error.message)
+      return
+    }
     setAllStaff(data as DbStaff[])
   }
 
@@ -1354,7 +1140,6 @@ function UsersPage({
         <span>{allStaff.filter((s) => s.active).length} active members</span>
       </div>
 
-      {/* Add staff form */}
       <div className="add-staff-form">
         <form
           className="form-inline"
@@ -1399,9 +1184,7 @@ function UsersPage({
                     <b>{s.name}</b>
                   </td>
                   <td>
-                    <span
-                      className={`type-pill ${s.active ? 'in' : 'out'}`}
-                    >
+                    <span className={`type-pill ${s.active ? 'in' : 'out'}`}>
                       {s.active ? 'Active' : 'Inactive'}
                     </span>
                   </td>
@@ -1495,322 +1278,971 @@ function Modal({
 
 // ── Dashboard ──────────────────────────────────────────────────────────────────
 
-type DashboardPanel = 'total-products' | 'total-stock' | 'low-stock' | null
+type DashboardAction = 'stock_in' | 'stock_out' | null
 
 function Dashboard({
   products,
   stockUpdates,
-  lowStock,
-  totalStock,
-  onViewLow,
-  onViewHistory,
+  identityName,
+  onRefresh,
+  onNotice,
 }: {
   products: Product[]
   stockUpdates: StockUpdate[]
-  lowStock: Product[]
-  totalStock: number
-  onViewLow: () => void
-  onViewHistory: () => void
+  identityName: string
+  onRefresh: () => void
+  onNotice: (msg: string) => void
 }) {
-  const [activePanel, setActivePanel] = useState<DashboardPanel>(null)
+  const [activeAction, setActiveAction] = useState<DashboardAction>(null)
+  const [dashSearch, setDashSearch] = useState('')
 
-  const togglePanel = (key: DashboardPanel) => {
-    setActivePanel((prev) => (prev === key ? null : key))
+  const toggleAction = (key: DashboardAction) => {
+    setActiveAction((prev) => (prev === key ? null : key))
   }
+
+  // product_racks rows derived from products for the dashboard table
+  // One row per (product, rack); products with no racks show once with qty 0 / rack "—"
+  type RackRow = {
+    productId: string
+    name: string
+    size: string
+    category: string
+    quantity: number
+    rackNumber: string
+  }
+
+  const rackRows = useMemo<RackRow[]>(() => {
+    const rows: RackRow[] = []
+    for (const p of products) {
+      if (p.racks.length === 0) {
+        rows.push({
+          productId: p.id,
+          name: p.name,
+          size: p.size,
+          category: p.category,
+          quantity: 0,
+          rackNumber: '—',
+        })
+      } else {
+        for (const r of p.racks) {
+          rows.push({
+            productId: p.id,
+            name: p.name,
+            size: p.size,
+            category: p.category,
+            quantity: r.quantity,
+            rackNumber: r.rackNumber,
+          })
+        }
+      }
+    }
+    return rows
+  }, [products])
+
+  const filteredRackRows = useMemo(() => {
+    if (!dashSearch.trim()) return rackRows
+    const q = dashSearch.toLowerCase()
+    return rackRows.filter(
+      (r) =>
+        r.name.toLowerCase().includes(q) ||
+        r.size.toLowerCase().includes(q) ||
+        r.category.toLowerCase().includes(q),
+    )
+  }, [rackRows, dashSearch])
+
+  const lastUpdated = stockUpdates[0]?.date ?? '—'
 
   return (
     <>
+      {/* Metric cards */}
       <section className="metrics">
-        <MetricCard
-          label="Total products"
-          value={products.length}
-          icon="▣"
-          panelKey="total-products"
-          activePanel={activePanel}
-          onToggle={togglePanel}
-        />
-        <MetricCard
-          label="Total stock quantity"
-          value={totalStock}
-          icon="◫"
-          panelKey="total-stock"
-          activePanel={activePanel}
-          onToggle={togglePanel}
-        />
-        <MetricCard
-          label="Low stock products"
-          value={lowStock.length}
-          icon="!"
-          danger
-          panelKey="low-stock"
-          activePanel={activePanel}
-          onToggle={togglePanel}
-        />
-        {/* Non-clickable last-updated card */}
+        {/* Info card: total products */}
+        <div className="metric">
+          <div className="metric-icon">▣</div>
+          <div>
+            <span>Total products</span>
+            <strong>{products.length}</strong>
+          </div>
+        </div>
+
+        {/* Action card: Stock In */}
+        <div
+          className={`metric metric-clickable metric-action ${activeAction === 'stock_in' ? 'metric-active metric-action-in' : ''}`}
+          role="button"
+          tabIndex={0}
+          onClick={() => toggleAction('stock_in')}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              toggleAction('stock_in')
+            }
+          }}
+          aria-pressed={activeAction === 'stock_in'}
+          aria-label={`Stock In. Click to ${activeAction === 'stock_in' ? 'close' : 'open'} form.`}
+        >
+          <div className="metric-icon metric-icon-in">↓</div>
+          <div>
+            <span>Stock In</span>
+            <strong className="metric-action-label">
+              {activeAction === 'stock_in' ? 'Close form' : 'Record arrival'}
+            </strong>
+          </div>
+        </div>
+
+        {/* Action card: Stock Out */}
+        <div
+          className={`metric metric-clickable metric-action ${activeAction === 'stock_out' ? 'metric-active metric-action-out' : ''}`}
+          role="button"
+          tabIndex={0}
+          onClick={() => toggleAction('stock_out')}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              toggleAction('stock_out')
+            }
+          }}
+          aria-pressed={activeAction === 'stock_out'}
+          aria-label={`Stock Out. Click to ${activeAction === 'stock_out' ? 'close' : 'open'} form.`}
+        >
+          <div className="metric-icon metric-icon-out">↑</div>
+          <div>
+            <span>Stock Out</span>
+            <strong className="metric-action-label">
+              {activeAction === 'stock_out' ? 'Close form' : 'Record removal'}
+            </strong>
+          </div>
+        </div>
+
+        {/* Info card: Last updated */}
         <div className="metric">
           <div className="metric-icon">◷</div>
           <div>
             <span>Last updated</span>
-            <strong className="date-value">{stockUpdates[0]?.date ?? '—'}</strong>
+            <strong className="date-value">{lastUpdated}</strong>
           </div>
         </div>
       </section>
 
-      {/* Expandable metric panel */}
-      {activePanel === 'total-products' && (
-        <section className="metric-detail-panel">
-          <div className="metric-detail-heading">
-            <h3>All products</h3>
-            <button className="text-button" onClick={() => setActivePanel(null)}>Close ×</button>
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th>SKU</th>
-                  <th>Category</th>
-                  <th>Stock</th>
-                  <th>Last updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {products.map((p) => (
-                  <tr key={p.id}>
-                    <td><b>{p.name}</b><span>{p.color}</span></td>
-                    <td><code>{p.sku}</code></td>
-                    <td>{p.category}</td>
-                    <td>
-                      <span className={`stock-count ${p.quantity <= p.minimum ? 'low' : ''}`}>{p.quantity}</span>
-                      <span className="stock-min">min {p.minimum}</span>
-                    </td>
-                    <td>{p.updatedAt}<span>by {p.updatedBy}</span></td>
-                  </tr>
-                ))}
-                {products.length === 0 && (
-                  <tr>
-                    <td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted)', padding: '28px' }}>No products found.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+      {/* Inline Stock In form */}
+      {activeAction === 'stock_in' && (
+        <StockInForm
+          products={products}
+          identityName={identityName}
+          onRefresh={onRefresh}
+          onNotice={onNotice}
+          onClose={() => setActiveAction(null)}
+        />
       )}
 
-      {activePanel === 'total-stock' && (
-        <section className="metric-detail-panel">
-          <div className="metric-detail-heading">
-            <h3>Stock quantity by product</h3>
-            <button className="text-button" onClick={() => setActivePanel(null)}>Close ×</button>
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th>SKU</th>
-                  <th>Total qty</th>
-                  <th>Per rack</th>
-                </tr>
-              </thead>
-              <tbody>
-                {products.map((p) => (
-                  <tr key={p.id}>
-                    <td><b>{p.name}</b><span>{p.color}</span></td>
-                    <td><code>{p.sku}</code></td>
-                    <td>
-                      <span className={`stock-count ${p.quantity <= p.minimum ? 'low' : ''}`}>{p.quantity}</span>
-                    </td>
-                    <td>
-                      {p.racks.length === 0 ? (
-                        <span className="no-racks">—</span>
-                      ) : (
-                        <span className="rack-list">
-                          {p.racks.map((r) => `${r.rackNumber} · ${r.quantity}`).join(', ')}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-                {products.length === 0 && (
-                  <tr>
-                    <td colSpan={4} style={{ textAlign: 'center', color: 'var(--muted)', padding: '28px' }}>No products found.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+      {/* Inline Stock Out form */}
+      {activeAction === 'stock_out' && (
+        <StockOutForm
+          products={products}
+          identityName={identityName}
+          onRefresh={onRefresh}
+          onNotice={onNotice}
+          onClose={() => setActiveAction(null)}
+        />
       )}
 
-      {activePanel === 'low-stock' && (
-        <section className="metric-detail-panel">
-          <div className="metric-detail-heading">
-            <h3>Low stock products</h3>
-            <button className="text-button" onClick={() => setActivePanel(null)}>Close ×</button>
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th>SKU</th>
-                  <th>Category</th>
-                  <th>Stock</th>
-                  <th>Minimum</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lowStock.map((p) => (
-                  <tr key={p.id}>
-                    <td><b>{p.name}</b><span>{p.color}</span></td>
-                    <td><code>{p.sku}</code></td>
-                    <td>{p.category}</td>
-                    <td><span className="stock-count low">{p.quantity}</span></td>
-                    <td><span className="stock-min">{p.minimum}</span></td>
-                  </tr>
-                ))}
-                {lowStock.length === 0 && (
-                  <tr>
-                    <td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted)', padding: '28px' }}>All products are well stocked.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-
-      {lowStock.length > 0 && (
-        <section className="low-alert">
-          <div className="alert-icon">!</div>
-          <div>
-            <b>Low stock needs your attention</b>
-            <p>
-              {lowStock.length} product
-              {lowStock.length !== 1 ? 's are' : ' is'} at or below minimum
-              stock level.
-            </p>
-          </div>
-          <button onClick={onViewLow}>
-            View low stock <span>→</span>
-          </button>
-        </section>
-      )}
-      <section className="two-col">
-        <div className="panel">
-          <div className="panel-heading">
-            <div>
-              <h2>Recent stock updates</h2>
-              <p>Latest stock activity</p>
-            </div>
-            <button className="text-button" onClick={onViewHistory}>
-              View all
-            </button>
-          </div>
-          <div className="transactions">
-            {stockUpdates.slice(0, 4).map((m) => (
-              <div className="transaction" key={m.id}>
-                <div
-                  className={`movement-icon ${m.type === 'Stock In' ? 'in' : 'out'}`}
-                >
-                  {m.type === 'Stock In' ? '↓' : '↑'}
-                </div>
-                <div className="transaction-detail">
-                  <b>{m.product}</b>
-                  <span>
-                    {m.sku} · Rack {m.rack} · {m.by}
-                  </span>
-                </div>
-                <div className="transaction-amount">
-                  <b className={m.type === 'Stock In' ? 'positive' : 'negative'}>
-                    {m.type === 'Stock In' ? '+' : '−'}
-                    {m.quantity}
-                  </b>
-                  <span>{m.date}</span>
-                </div>
-              </div>
-            ))}
-            {stockUpdates.length === 0 && (
-              <p className="empty-state">No stock updates yet.</p>
-            )}
-          </div>
+      {/* Dashboard product-rack table */}
+      <section className="panel products-panel">
+        <div className="table-tools">
+          <label className="search">
+            ⌕{' '}
+            <input
+              value={dashSearch}
+              onChange={(e) => setDashSearch(e.target.value)}
+              placeholder="Search name, size or type"
+            />
+          </label>
+          <span>{filteredRackRows.length} rows</span>
         </div>
-        <div className="panel stock-panel">
-          <div className="panel-heading">
-            <div>
-              <h2>Low stock</h2>
-              <p>Products below minimum level</p>
-            </div>
-            <button className="text-button" onClick={onViewLow}>
-              View all
-            </button>
-          </div>
-          {lowStock.length === 0 && (
-            <p className="empty-state">All products are well stocked.</p>
-          )}
-          {lowStock.map((p) => (
-            <div className="low-row" key={p.id}>
-              <div>
-                <b>{p.name}</b>
-                <span>{p.sku}</span>
-              </div>
-              <div>
-                <b>{p.quantity} left</b>
-                <span>Min. {p.minimum}</span>
-              </div>
-            </div>
-          ))}
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Product name</th>
+                <th>Size</th>
+                <th>Type</th>
+                <th>Quantity</th>
+                <th>Rack no.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRackRows.map((r, idx) => (
+                <tr key={`${r.productId}-${r.rackNumber}-${idx}`}>
+                  <td>
+                    <b>{r.name}</b>
+                  </td>
+                  <td>{sizeLabel(r.size)}</td>
+                  <td>{r.category}</td>
+                  <td>
+                    <span className="stock-count dash-rack-qty">
+                      {r.quantity}
+                    </span>
+                  </td>
+                  <td>
+                    {r.rackNumber === '—' ? (
+                      <span className="no-racks">—</span>
+                    ) : (
+                      <code>{r.rackNumber}</code>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {filteredRackRows.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={5}
+                    style={{
+                      textAlign: 'center',
+                      color: 'var(--muted)',
+                      padding: '28px',
+                    }}
+                  >
+                    {products.length === 0
+                      ? 'No products yet.'
+                      : 'No results match your search.'}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </section>
     </>
   )
 }
 
-// ── MetricCard (clickable) ─────────────────────────────────────────────────────
+// ── SearchableSelect ───────────────────────────────────────────────────────────
 
-function MetricCard({
-  label,
-  value,
-  icon,
-  danger,
-  panelKey,
-  activePanel,
-  onToggle,
-}: {
+type SearchableSelectOption = {
+  value: string
   label: string
-  value: string | number
-  icon: string
-  danger?: boolean
-  panelKey: DashboardPanel
-  activePanel: DashboardPanel
-  onToggle: (key: DashboardPanel) => void
+}
+
+function SearchableSelect({
+  id,
+  placeholder,
+  options,
+  value,
+  onChange,
+  disabled,
+}: {
+  id?: string
+  placeholder: string
+  options: SearchableSelectOption[]
+  value: string
+  onChange: (value: string) => void
+  disabled?: boolean
 }) {
-  const isActive = activePanel === panelKey
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [highlightIdx, setHighlightIdx] = useState(-1)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLUListElement>(null)
+
+  const selectedOption = options.find((o) => o.value === value)
+
+  const filtered = useMemo(() => {
+    if (!query.trim()) return options
+    const q = query.toLowerCase()
+    return options.filter((o) => o.label.toLowerCase().includes(q))
+  }, [options, query])
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+        setQuery('')
+        setHighlightIdx(-1)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  // Scroll highlighted option into view
+  useEffect(() => {
+    if (!listRef.current || highlightIdx < 0) return
+    const item = listRef.current.children[highlightIdx] as HTMLElement | undefined
+    item?.scrollIntoView({ block: 'nearest' })
+  }, [highlightIdx])
+
+  const openDropdown = () => {
+    if (disabled) return
+    setOpen(true)
+    setQuery('')
+    setHighlightIdx(-1)
+  }
+
+  const selectOption = (opt: SearchableSelectOption) => {
+    onChange(opt.value)
+    setOpen(false)
+    setQuery('')
+    setHighlightIdx(-1)
+  }
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape') {
+      setOpen(false)
+      setQuery('')
+      setHighlightIdx(-1)
+      return
+    }
+    if (!open) {
+      if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        openDropdown()
+      }
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setHighlightIdx((i) => Math.min(i + 1, filtered.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setHighlightIdx((i) => Math.max(i - 1, 0))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      if (highlightIdx >= 0 && filtered[highlightIdx]) {
+        selectOption(filtered[highlightIdx])
+      } else if (filtered.length === 1) {
+        selectOption(filtered[0])
+      }
+    }
+  }
+
+  const displayValue = open ? query : (selectedOption?.label ?? '')
+
   return (
     <div
-      className={`metric metric-clickable ${isActive ? 'metric-active' : ''}`}
-      role="button"
-      tabIndex={0}
-      onClick={() => onToggle(panelKey)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          onToggle(panelKey)
-        }
-      }}
-      aria-pressed={isActive}
-      aria-label={`${label}: ${value}. Click to ${isActive ? 'hide' : 'show'} details.`}
+      ref={containerRef}
+      className={`searchable-select${disabled ? ' searchable-select-disabled' : ''}`}
     >
-      <div className={`metric-icon ${danger ? 'danger' : ''}`}>{icon}</div>
-      <div>
-        <span>{label}</span>
-        <strong>{value}</strong>
-      </div>
+      <input
+        ref={inputRef}
+        id={id}
+        className="searchable-select-input"
+        type="text"
+        placeholder={disabled ? '—' : placeholder}
+        value={displayValue}
+        disabled={disabled}
+        autoComplete="off"
+        onFocus={openDropdown}
+        onClick={openDropdown}
+        onChange={(e) => {
+          setQuery(e.target.value)
+          setOpen(true)
+          setHighlightIdx(-1)
+        }}
+        onKeyDown={handleKeyDown}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-autocomplete="list"
+      />
+      {open && !disabled && (
+        <ul
+          ref={listRef}
+          className="searchable-select-options"
+          role="listbox"
+        >
+          {filtered.length === 0 ? (
+            <li className="searchable-select-empty">No matches</li>
+          ) : (
+            filtered.map((opt, idx) => (
+              <li
+                key={opt.value}
+                className={`searchable-select-option${idx === highlightIdx ? ' searchable-select-option-active' : ''}${opt.value === value ? ' searchable-select-option-selected' : ''}`}
+                role="option"
+                aria-selected={opt.value === value}
+                onMouseDown={(e) => {
+                  // prevent input blur before click fires
+                  e.preventDefault()
+                  selectOption(opt)
+                }}
+                onMouseEnter={() => setHighlightIdx(idx)}
+              >
+                {opt.label}
+              </li>
+            ))
+          )}
+        </ul>
+      )}
     </div>
   )
 }
+
+// ── StockInForm ────────────────────────────────────────────────────────────────
+
+function StockInForm({
+  products,
+  identityName,
+  onRefresh,
+  onNotice,
+  onClose,
+}: {
+  products: Product[]
+  identityName: string
+  onRefresh: () => void
+  onNotice: (msg: string) => void
+  onClose: () => void
+}) {
+  const [selectedName, setSelectedName] = useState('')
+  const [selectedSize, setSelectedSize] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState('')
+  const [selectedRackNumber, setSelectedRackNumber] = useState('')
+  const [useNewRack, setUseNewRack] = useState(false)
+  const [newRackInput, setNewRackInput] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  // Distinct names
+  const nameOptions = useMemo<SearchableSelectOption[]>(() => {
+    const seen = new Set<string>()
+    const opts: SearchableSelectOption[] = []
+    for (const p of products) {
+      if (!seen.has(p.name)) {
+        seen.add(p.name)
+        opts.push({ value: p.name, label: p.name })
+      }
+    }
+    return opts
+  }, [products])
+
+  // Sizes for selected name (label shows inches suffix, value stays raw)
+  const sizeOptions = useMemo<SearchableSelectOption[]>(() => {
+    if (!selectedName) return []
+    const seen = new Set<string>()
+    const opts: SearchableSelectOption[] = []
+    for (const p of products) {
+      if (p.name === selectedName && !seen.has(p.size)) {
+        seen.add(p.size)
+        opts.push({ value: p.size, label: sizeLabel(p.size) })
+      }
+    }
+    return opts
+  }, [products, selectedName])
+
+  // Categories for selected name+size
+  const categoryOptions = useMemo<SearchableSelectOption[]>(() => {
+    if (!selectedName || !selectedSize) return []
+    const seen = new Set<string>()
+    const opts: SearchableSelectOption[] = []
+    for (const p of products) {
+      if (p.name === selectedName && p.size === selectedSize && !seen.has(p.category)) {
+        seen.add(p.category)
+        opts.push({ value: p.category, label: p.category })
+      }
+    }
+    return opts
+  }, [products, selectedName, selectedSize])
+
+  // Resolved product (unique by name+size+category)
+  const resolvedProduct = useMemo(
+    () =>
+      selectedName && selectedSize && selectedCategory
+        ? (products.find(
+            (p) =>
+              p.name === selectedName &&
+              p.size === selectedSize &&
+              p.category === selectedCategory,
+          ) ?? null)
+        : null,
+    [products, selectedName, selectedSize, selectedCategory],
+  )
+
+  // Rack options for the searchable dropdown (existing racks + add-new sentinel)
+  const rackOptions = useMemo<SearchableSelectOption[]>(() => {
+    const opts: SearchableSelectOption[] = (resolvedProduct?.racks ?? []).map(
+      (r) => ({
+        value: r.rackNumber,
+        label: `${r.rackNumber} (${r.quantity} in stock)`,
+      }),
+    )
+    opts.push({ value: '__new__', label: '+ Add new rack' })
+    return opts
+  }, [resolvedProduct])
+
+  const racks = resolvedProduct?.racks ?? []
+
+  const handleNameChange = (name: string) => {
+    setSelectedName(name)
+    setSelectedSize('')
+    setSelectedCategory('')
+    setSelectedRackNumber('')
+    setUseNewRack(false)
+    setNewRackInput('')
+  }
+
+  const handleSizeChange = (size: string) => {
+    setSelectedSize(size)
+    setSelectedCategory('')
+    setSelectedRackNumber('')
+    setUseNewRack(false)
+    setNewRackInput('')
+  }
+
+  const handleCategoryChange = (cat: string) => {
+    setSelectedCategory(cat)
+    setSelectedRackNumber('')
+    setUseNewRack(false)
+    setNewRackInput('')
+  }
+
+  const handleRackChange = (val: string) => {
+    if (val === '__new__') {
+      setUseNewRack(true)
+      setSelectedRackNumber('')
+      setNewRackInput('')
+    } else {
+      setUseNewRack(false)
+      setSelectedRackNumber(val)
+      setNewRackInput('')
+    }
+  }
+
+  // When product resolves and it has zero racks, auto-switch to new-rack mode
+  useEffect(() => {
+    if (resolvedProduct && racks.length === 0) {
+      setUseNewRack(true)
+      setSelectedRackNumber('')
+    } else if (resolvedProduct && racks.length > 0) {
+      setUseNewRack(false)
+    }
+  }, [resolvedProduct, racks.length])
+
+  const effectiveRack = useNewRack ? newRackInput.trim() : selectedRackNumber
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    if (!supabase) return
+
+    const data = new FormData(e.currentTarget)
+    const quantity = Number(data.get('quantity'))
+
+    if (!resolvedProduct) {
+      onNotice('Select a product (Name, Size and Type).')
+      return
+    }
+    if (!effectiveRack) {
+      onNotice('Enter or select a rack number.')
+      return
+    }
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      onNotice('Enter a valid quantity.')
+      return
+    }
+
+    setSubmitting(true)
+    const { error } = await supabase.from('stock_transactions').insert({
+      product_id: resolvedProduct.id,
+      rack_number: effectiveRack,
+      movement_type: 'stock_in',
+      quantity,
+      updated_by: identityName,
+    })
+    setSubmitting(false)
+
+    if (error) {
+      onNotice(error.message)
+      return
+    }
+
+    onNotice('Stock In recorded successfully.')
+    onClose()
+    onRefresh()
+  }
+
+  return (
+    <section className="inline-form-panel panel">
+      <div className="inline-form-heading">
+        <h3>Stock In</h3>
+        <button className="text-button" onClick={onClose}>
+          Close ×
+        </button>
+      </div>
+      <div className="inline-form-body">
+        <form
+          className="form"
+          onSubmit={(e) => {
+            void handleSubmit(e)
+          }}
+        >
+          <div className="form-grid form-grid-3">
+            <label>
+              Select Product Name
+              <SearchableSelect
+                placeholder="Type to search…"
+                options={nameOptions}
+                value={selectedName}
+                onChange={handleNameChange}
+              />
+            </label>
+            <label>
+              Select Size
+              <SearchableSelect
+                placeholder={selectedName ? 'Type to search…' : 'Choose name first'}
+                options={sizeOptions}
+                value={selectedSize}
+                onChange={handleSizeChange}
+                disabled={!selectedName}
+              />
+            </label>
+            <label>
+              Select Type
+              <SearchableSelect
+                placeholder={selectedSize ? 'Type to search…' : 'Choose size first'}
+                options={categoryOptions}
+                value={selectedCategory}
+                onChange={handleCategoryChange}
+                disabled={!selectedSize}
+              />
+            </label>
+          </div>
+
+          <div className="form-grid">
+            <label>
+              Rack No.
+              {resolvedProduct ? (
+                <>
+                  {racks.length > 0 && !useNewRack ? (
+                    <SearchableSelect
+                      placeholder="Select a rack…"
+                      options={rackOptions}
+                      value={selectedRackNumber || ''}
+                      onChange={handleRackChange}
+                    />
+                  ) : useNewRack ? (
+                    <div className="new-rack-wrap">
+                      <input
+                        className="new-rack-input"
+                        placeholder="e.g. A-01"
+                        value={newRackInput}
+                        onChange={(e) => setNewRackInput(e.target.value)}
+                        autoFocus={racks.length > 0}
+                      />
+                      {racks.length > 0 && (
+                        <button
+                          type="button"
+                          className="rack-cancel-new"
+                          onClick={() => {
+                            setUseNewRack(false)
+                            setSelectedRackNumber('')
+                          }}
+                        >
+                          Cancel — pick existing
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    /* zero racks — auto new rack mode */
+                    <input
+                      className="new-rack-input"
+                      placeholder="e.g. A-01 (first rack for this product)"
+                      value={newRackInput}
+                      onChange={(e) => setNewRackInput(e.target.value)}
+                    />
+                  )}
+                </>
+              ) : (
+                <input
+                  disabled
+                  placeholder="Resolve product first"
+                  className="all-products-qty-readonly"
+                />
+              )}
+            </label>
+            <label>
+              Quantity
+              <input name="quantity" type="number" min="1" required />
+            </label>
+          </div>
+
+          <button
+            className="button primary"
+            type="submit"
+            disabled={submitting || !resolvedProduct}
+          >
+            {submitting ? 'Saving…' : 'Record Stock In'}
+          </button>
+        </form>
+      </div>
+    </section>
+  )
+}
+
+// ── StockOutForm ───────────────────────────────────────────────────────────────
+
+function StockOutForm({
+  products,
+  identityName,
+  onRefresh,
+  onNotice,
+  onClose,
+}: {
+  products: Product[]
+  identityName: string
+  onRefresh: () => void
+  onNotice: (msg: string) => void
+  onClose: () => void
+}) {
+  const [selectedName, setSelectedName] = useState('')
+  const [selectedSize, setSelectedSize] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState('')
+  const [selectedRackNumber, setSelectedRackNumber] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  // Distinct names
+  const nameOptions = useMemo<SearchableSelectOption[]>(() => {
+    const seen = new Set<string>()
+    const opts: SearchableSelectOption[] = []
+    for (const p of products) {
+      if (!seen.has(p.name)) {
+        seen.add(p.name)
+        opts.push({ value: p.name, label: p.name })
+      }
+    }
+    return opts
+  }, [products])
+
+  // Sizes for selected name (label shows inches suffix, value stays raw)
+  const sizeOptions = useMemo<SearchableSelectOption[]>(() => {
+    if (!selectedName) return []
+    const seen = new Set<string>()
+    const opts: SearchableSelectOption[] = []
+    for (const p of products) {
+      if (p.name === selectedName && !seen.has(p.size)) {
+        seen.add(p.size)
+        opts.push({ value: p.size, label: sizeLabel(p.size) })
+      }
+    }
+    return opts
+  }, [products, selectedName])
+
+  // Categories for selected name+size
+  const categoryOptions = useMemo<SearchableSelectOption[]>(() => {
+    if (!selectedName || !selectedSize) return []
+    const seen = new Set<string>()
+    const opts: SearchableSelectOption[] = []
+    for (const p of products) {
+      if (p.name === selectedName && p.size === selectedSize && !seen.has(p.category)) {
+        seen.add(p.category)
+        opts.push({ value: p.category, label: p.category })
+      }
+    }
+    return opts
+  }, [products, selectedName, selectedSize])
+
+  // Resolved product (unique by name+size+category)
+  const resolvedProduct = useMemo(
+    () =>
+      selectedName && selectedSize && selectedCategory
+        ? (products.find(
+            (p) =>
+              p.name === selectedName &&
+              p.size === selectedSize &&
+              p.category === selectedCategory,
+          ) ?? null)
+        : null,
+    [products, selectedName, selectedSize, selectedCategory],
+  )
+
+  // Only racks with qty > 0
+  const racksWithStock = useMemo(
+    () => (resolvedProduct?.racks ?? []).filter((r) => r.quantity > 0),
+    [resolvedProduct],
+  )
+
+  const rackOptions = useMemo<SearchableSelectOption[]>(
+    () =>
+      racksWithStock.map((r) => ({
+        value: r.rackNumber,
+        label: `${r.rackNumber} (${r.quantity} available)`,
+      })),
+    [racksWithStock],
+  )
+
+  const selectedRackObj = racksWithStock.find(
+    (r) => r.rackNumber === selectedRackNumber,
+  )
+  const availableQty = selectedRackObj?.quantity ?? 0
+
+  const hasStock = racksWithStock.length > 0
+
+  const handleNameChange = (name: string) => {
+    setSelectedName(name)
+    setSelectedSize('')
+    setSelectedCategory('')
+    setSelectedRackNumber('')
+  }
+
+  const handleSizeChange = (size: string) => {
+    setSelectedSize(size)
+    setSelectedCategory('')
+    setSelectedRackNumber('')
+  }
+
+  const handleCategoryChange = (cat: string) => {
+    setSelectedCategory(cat)
+    setSelectedRackNumber('')
+  }
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    if (!supabase) return
+
+    const data = new FormData(e.currentTarget)
+    const quantity = Number(data.get('quantity'))
+    const rack = selectedRackNumber.trim()
+
+    if (!resolvedProduct) {
+      onNotice('Select a product (Name, Size and Type).')
+      return
+    }
+    if (!rack) {
+      onNotice('Select a rack.')
+      return
+    }
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      onNotice('Enter a valid quantity.')
+      return
+    }
+    if (quantity > availableQty) {
+      onNotice(
+        `Only ${availableQty} items available on rack ${rack} for this product.`,
+      )
+      return
+    }
+
+    setSubmitting(true)
+    const { error } = await supabase.from('stock_transactions').insert({
+      product_id: resolvedProduct.id,
+      rack_number: rack,
+      movement_type: 'stock_out',
+      quantity,
+      updated_by: identityName,
+    })
+    setSubmitting(false)
+
+    if (error) {
+      onNotice(error.message)
+      return
+    }
+
+    onNotice('Stock Out recorded successfully.')
+    onClose()
+    onRefresh()
+  }
+
+  return (
+    <section className="inline-form-panel panel">
+      <div className="inline-form-heading">
+        <h3>Stock Out</h3>
+        <button className="text-button" onClick={onClose}>
+          Close ×
+        </button>
+      </div>
+      <div className="inline-form-body">
+        <form
+          className="form"
+          onSubmit={(e) => {
+            void handleSubmit(e)
+          }}
+        >
+          <div className="form-grid form-grid-3">
+            <label>
+              Select Product Name
+              <SearchableSelect
+                placeholder="Type to search…"
+                options={nameOptions}
+                value={selectedName}
+                onChange={handleNameChange}
+              />
+            </label>
+            <label>
+              Select Size
+              <SearchableSelect
+                placeholder={selectedName ? 'Type to search…' : 'Choose name first'}
+                options={sizeOptions}
+                value={selectedSize}
+                onChange={handleSizeChange}
+                disabled={!selectedName}
+              />
+            </label>
+            <label>
+              Select Type
+              <SearchableSelect
+                placeholder={selectedSize ? 'Type to search…' : 'Choose size first'}
+                options={categoryOptions}
+                value={selectedCategory}
+                onChange={handleCategoryChange}
+                disabled={!selectedSize}
+              />
+            </label>
+          </div>
+
+          <div className="form-grid">
+            <label>
+              Rack No.
+              {resolvedProduct ? (
+                hasStock ? (
+                  <SearchableSelect
+                    placeholder="Select a rack…"
+                    options={rackOptions}
+                    value={selectedRackNumber}
+                    onChange={setSelectedRackNumber}
+                  />
+                ) : (
+                  <input
+                    disabled
+                    value="No stock available for this product"
+                    className="all-products-qty-readonly"
+                  />
+                )
+              ) : (
+                <input
+                  disabled
+                  placeholder="Resolve product first"
+                  className="all-products-qty-readonly"
+                />
+              )}
+            </label>
+            <label>
+              Quantity{availableQty > 0 && <span>max {availableQty}</span>}
+              <input
+                name="quantity"
+                type="number"
+                min="1"
+                max={availableQty > 0 ? availableQty : undefined}
+                required
+                disabled={!hasStock || !selectedRackNumber}
+              />
+            </label>
+          </div>
+
+          {resolvedProduct && !hasStock && (
+            <p className="empty-state" style={{ margin: 0, padding: 0 }}>
+              This product has no stock on any rack. Record a Stock In first.
+            </p>
+          )}
+
+          <button
+            className="button primary"
+            type="submit"
+            disabled={submitting || !resolvedProduct || !hasStock || !selectedRackNumber}
+          >
+            {submitting ? 'Saving…' : 'Record Stock Out'}
+          </button>
+        </form>
+      </div>
+    </section>
+  )
+}
+
+// ── Products page ──────────────────────────────────────────────────────────────
 
 function Products({
   products,
@@ -1829,7 +2261,7 @@ function Products({
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search name, SKU or category"
+            placeholder="Search name, size or category"
           />
         </label>
         <span>{products.length} products</span>
@@ -1838,10 +2270,10 @@ function Products({
         <table>
           <thead>
             <tr>
-              <th>Product</th>
-              <th>SKU</th>
-              <th>Category</th>
-              <th>Stock</th>
+              <th>Product name</th>
+              <th>Size</th>
+              <th>Type</th>
+              <th>Quantity</th>
               <th>Racks</th>
               <th>Last updated</th>
             </tr>
@@ -1851,19 +2283,11 @@ function Products({
               <tr key={p.id}>
                 <td>
                   <b>{p.name}</b>
-                  <span>{p.color}</span>
                 </td>
-                <td>
-                  <code>{p.sku}</code>
-                </td>
+                <td>{sizeLabel(p.size)}</td>
                 <td>{p.category}</td>
                 <td>
-                  <span
-                    className={`stock-count ${p.quantity <= p.minimum ? 'low' : ''}`}
-                  >
-                    {p.quantity}
-                  </span>
-                  <span className="stock-min">min {p.minimum}</span>
+                  <span className="stock-count">{p.quantity}</span>
                 </td>
                 <td>
                   {p.racks.length === 0 ? (
@@ -1903,6 +2327,8 @@ function Products({
   )
 }
 
+// ── History page ───────────────────────────────────────────────────────────────
+
 function History({ stockUpdates }: { stockUpdates: StockUpdate[] }) {
   return (
     <section className="panel products-panel">
@@ -1916,11 +2342,10 @@ function History({ stockUpdates }: { stockUpdates: StockUpdate[] }) {
             <tr>
               <th>Date &amp; time</th>
               <th>Product</th>
-              <th>Rack</th>
               <th>Type</th>
               <th>Quantity</th>
+              <th>Rack</th>
               <th>Updated by</th>
-              <th>Remarks</th>
             </tr>
           </thead>
           <tbody>
@@ -1929,10 +2354,6 @@ function History({ stockUpdates }: { stockUpdates: StockUpdate[] }) {
                 <td>{m.date}</td>
                 <td>
                   <b>{m.product}</b>
-                  <span>{m.sku}</span>
-                </td>
-                <td>
-                  <code>{m.rack}</code>
                 </td>
                 <td>
                   <span
@@ -1944,14 +2365,16 @@ function History({ stockUpdates }: { stockUpdates: StockUpdate[] }) {
                 <td>
                   <b>{m.quantity}</b>
                 </td>
+                <td>
+                  <code>{m.rack}</code>
+                </td>
                 <td>{m.by}</td>
-                <td>{m.remarks || '—'}</td>
               </tr>
             ))}
             {stockUpdates.length === 0 && (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={6}
                   style={{
                     textAlign: 'center',
                     color: 'var(--muted)',
