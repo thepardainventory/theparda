@@ -354,6 +354,28 @@ function App() {
   const [page, setPage] = useState<PageKey>('dashboard')
   const [search, setSearch] = useState('')
   const [notice, setNotice] = useState('')
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+
+  // Auto-dismiss the toast after 5 seconds whenever a new notice appears.
+  useEffect(() => {
+    if (!notice) return
+    const timer = setTimeout(() => setNotice(''), 5000)
+    return () => clearTimeout(timer)
+  }, [notice])
+
+  // Close the mobile nav drawer on Escape, and lock body scroll while open.
+  useEffect(() => {
+    if (!mobileNavOpen) return
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') setMobileNavOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = ''
+    }
+  }, [mobileNavOpen])
 
   // ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -654,7 +676,25 @@ function App() {
               : 'Add a new product to the inventory.'
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${mobileNavOpen ? ' nav-open' : ''}`}>
+      <div className="mobile-topbar">
+        <div className="brand">
+          <div className="brand-mark">P</div>
+          <strong>The Parda</strong>
+        </div>
+        <button
+          className="hamburger"
+          onClick={() => setMobileNavOpen(true)}
+          aria-label="Open navigation menu"
+        >
+          ☰
+        </button>
+      </div>
+      <div
+        className="drawer-backdrop"
+        onClick={() => setMobileNavOpen(false)}
+        aria-hidden="true"
+      />
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">P</div>
@@ -663,7 +703,7 @@ function App() {
             <span>Inventory portal</span>
           </div>
         </div>
-        <nav aria-label="Main navigation">
+        <nav aria-label="Main navigation" onClick={() => setMobileNavOpen(false)}>
           <Nav
             active={page === 'dashboard'}
             icon="▦"
@@ -878,20 +918,20 @@ function AllProductsPage({
           <tbody>
             {products.map((p) => (
               <tr key={p.id}>
-                <td>
+                <td data-label="Product name">
                   <b>{p.name}</b>
                 </td>
-                <td>{sizeLabel(p.size)}</td>
-                <td>{p.category}</td>
-                <td>
+                <td data-label="Size">{sizeLabel(p.size)}</td>
+                <td data-label="Type">{p.category}</td>
+                <td data-label="Stock">
                   <span className="stock-count">{p.quantity}</span>
                   <span className="stock-min">trigger-managed</span>
                 </td>
-                <td>
+                <td data-label="Last updated">
                   {p.updatedAt}
                   <span>by {p.updatedBy}</span>
                 </td>
-                <td>
+                <td data-label="Action">
                   <button
                     className="text-button"
                     onClick={() => openEdit(p)}
@@ -1180,16 +1220,16 @@ function UsersPage({
             <tbody>
               {allStaff.map((s) => (
                 <tr key={s.id} className={s.active ? '' : 'row-inactive'}>
-                  <td>
+                  <td data-label="Name">
                     <b>{s.name}</b>
                   </td>
-                  <td>
+                  <td data-label="Status">
                     <span className={`type-pill ${s.active ? 'in' : 'out'}`}>
                       {s.active ? 'Active' : 'Inactive'}
                     </span>
                   </td>
-                  <td>{fmtDate(s.created_at)}</td>
-                  <td>
+                  <td data-label="Added">{fmtDate(s.created_at)}</td>
+                  <td data-label="Action">
                     <button
                       className="text-button"
                       onClick={() => {
@@ -1578,17 +1618,17 @@ function Dashboard({
             <tbody>
               {filteredRackRows.map((r, idx) => (
                 <tr key={`${r.productId}-${r.rackNumber}-${idx}`}>
-                  <td>
+                  <td data-label="Product name">
                     <b>{r.name}</b>
                   </td>
-                  <td>{sizeLabel(r.size)}</td>
-                  <td>{r.category}</td>
-                  <td>
+                  <td data-label="Size">{sizeLabel(r.size)}</td>
+                  <td data-label="Type">{r.category}</td>
+                  <td data-label="Quantity">
                     <span className="stock-count dash-rack-qty">
                       {r.quantity}
                     </span>
                   </td>
-                  <td>
+                  <td data-label="Rack no.">
                     {r.rackNumber === '—' ? (
                       <span className="no-racks">—</span>
                     ) : (
@@ -2387,15 +2427,15 @@ function Products({
           <tbody>
             {products.map((p) => (
               <tr key={p.id}>
-                <td>
+                <td data-label="Product name">
                   <b>{p.name}</b>
                 </td>
-                <td>{sizeLabel(p.size)}</td>
-                <td>{p.category}</td>
-                <td>
+                <td data-label="Size">{sizeLabel(p.size)}</td>
+                <td data-label="Type">{p.category}</td>
+                <td data-label="Quantity">
                   <span className="stock-count">{p.quantity}</span>
                 </td>
-                <td>
+                <td data-label="Racks">
                   {p.racks.length === 0 ? (
                     <span className="no-racks">—</span>
                   ) : (
@@ -2406,7 +2446,7 @@ function Products({
                     </span>
                   )}
                 </td>
-                <td>
+                <td data-label="Last updated">
                   {p.updatedAt}
                   <span>by {p.updatedBy}</span>
                 </td>
@@ -2457,24 +2497,24 @@ function History({ stockUpdates }: { stockUpdates: StockUpdate[] }) {
           <tbody>
             {stockUpdates.map((m) => (
               <tr key={m.id}>
-                <td>{m.date}</td>
-                <td>
+                <td data-label="Date & time">{m.date}</td>
+                <td data-label="Product">
                   <b>{m.product}</b>
                 </td>
-                <td>
+                <td data-label="Type">
                   <span
                     className={`type-pill ${m.type === 'Stock In' ? 'in' : 'out'}`}
                   >
                     {m.type}
                   </span>
                 </td>
-                <td>
+                <td data-label="Quantity">
                   <b>{m.quantity}</b>
                 </td>
-                <td>
+                <td data-label="Rack">
                   <code>{m.rack}</code>
                 </td>
-                <td>{m.by}</td>
+                <td data-label="Updated by">{m.by}</td>
               </tr>
             ))}
             {stockUpdates.length === 0 && (
