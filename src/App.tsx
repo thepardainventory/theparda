@@ -1295,9 +1295,19 @@ function Dashboard({
 }) {
   const [activeAction, setActiveAction] = useState<DashboardAction>(null)
   const [dashSearch, setDashSearch] = useState('')
+  const [filterName, setFilterName] = useState('')
+  const [filterSize, setFilterSize] = useState('')
+  const [filterType, setFilterType] = useState('')
 
   const toggleAction = (key: DashboardAction) => {
     setActiveAction((prev) => (prev === key ? null : key))
+  }
+
+  const clearFilters = () => {
+    setDashSearch('')
+    setFilterName('')
+    setFilterSize('')
+    setFilterType('')
   }
 
   // product_racks rows derived from products for the dashboard table
@@ -1339,16 +1349,73 @@ function Dashboard({
     return rows
   }, [products])
 
+  // Distinct filter options — independent of each other, derived from all products
+  const nameFilterOptions = useMemo<SearchableSelectOption[]>(() => {
+    const seen = new Set<string>()
+    const opts: SearchableSelectOption[] = [{ value: '', label: 'All Names' }]
+    for (const p of products) {
+      if (!seen.has(p.name)) {
+        seen.add(p.name)
+        opts.push({ value: p.name, label: p.name })
+      }
+    }
+    return opts
+  }, [products])
+
+  const sizeFilterOptions = useMemo<SearchableSelectOption[]>(() => {
+    const seen = new Set<string>()
+    const opts: SearchableSelectOption[] = [{ value: '', label: 'All Sizes' }]
+    for (const p of products) {
+      if (!seen.has(p.size)) {
+        seen.add(p.size)
+        opts.push({ value: p.size, label: sizeLabel(p.size) })
+      }
+    }
+    return opts
+  }, [products])
+
+  const typeFilterOptions = useMemo<SearchableSelectOption[]>(() => {
+    const seen = new Set<string>()
+    const opts: SearchableSelectOption[] = [{ value: '', label: 'All Types' }]
+    for (const p of products) {
+      if (!seen.has(p.category)) {
+        seen.add(p.category)
+        opts.push({ value: p.category, label: p.category })
+      }
+    }
+    return opts
+  }, [products])
+
   const filteredRackRows = useMemo(() => {
-    if (!dashSearch.trim()) return rackRows
-    const q = dashSearch.toLowerCase()
-    return rackRows.filter(
-      (r) =>
-        r.name.toLowerCase().includes(q) ||
-        r.size.toLowerCase().includes(q) ||
-        r.category.toLowerCase().includes(q),
-    )
-  }, [rackRows, dashSearch])
+    let rows = rackRows
+    // Text search filter (existing behaviour)
+    if (dashSearch.trim()) {
+      const q = dashSearch.toLowerCase()
+      rows = rows.filter(
+        (r) =>
+          r.name.toLowerCase().includes(q) ||
+          r.size.toLowerCase().includes(q) ||
+          r.category.toLowerCase().includes(q),
+      )
+    }
+    // Dropdown filters (AND-combined, exact match on selected value)
+    if (filterName) {
+      rows = rows.filter((r) => r.name === filterName)
+    }
+    if (filterSize) {
+      rows = rows.filter((r) => r.size === filterSize)
+    }
+    if (filterType) {
+      rows = rows.filter((r) => r.category === filterType)
+    }
+    return rows
+  }, [rackRows, dashSearch, filterName, filterSize, filterType])
+
+  const hasActiveFilters =
+    dashSearch.trim() !== '' ||
+    filterName !== '' ||
+    filterSize !== '' ||
+    filterType !== ''
 
   const lastUpdated = stockUpdates[0]?.date ?? '—'
 
@@ -1441,16 +1508,61 @@ function Dashboard({
 
       {/* Dashboard product-rack table */}
       <section className="panel products-panel">
-        <div className="table-tools">
-          <label className="search">
-            ⌕{' '}
-            <input
-              value={dashSearch}
-              onChange={(e) => setDashSearch(e.target.value)}
-              placeholder="Search name, size or type"
-            />
-          </label>
-          <span>{filteredRackRows.length} rows</span>
+        <div className="table-tools dash-table-tools">
+          <div className="dash-filters">
+            <label className="search">
+              ⌕{' '}
+              <input
+                value={dashSearch}
+                onChange={(e) => setDashSearch(e.target.value)}
+                placeholder="Search name, size or type"
+              />
+            </label>
+            <div className="dash-filter-dropdowns">
+              <label className="dash-filter-label">
+                Product Name
+                <SearchableSelect
+                  id="dash-filter-name"
+                  placeholder="All Names"
+                  options={nameFilterOptions}
+                  value={filterName}
+                  onChange={setFilterName}
+                />
+              </label>
+              <label className="dash-filter-label">
+                Size
+                <SearchableSelect
+                  id="dash-filter-size"
+                  placeholder="All Sizes"
+                  options={sizeFilterOptions}
+                  value={filterSize}
+                  onChange={setFilterSize}
+                />
+              </label>
+              <label className="dash-filter-label">
+                Type
+                <SearchableSelect
+                  id="dash-filter-type"
+                  placeholder="All Types"
+                  options={typeFilterOptions}
+                  value={filterType}
+                  onChange={setFilterType}
+                />
+              </label>
+            </div>
+          </div>
+          <div className="dash-tools-right">
+            <span>{filteredRackRows.length} rows</span>
+            {hasActiveFilters && (
+              <button
+                className="text-button dash-clear-filters"
+                type="button"
+                onClick={clearFilters}
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
         </div>
         <div className="table-wrap">
           <table>

@@ -100,3 +100,12 @@ main{padding:42px 48px 55px;max-width:1450px;width:100%;margin:auto}header{displ
 /* ── New rack text input inside StockInForm ─────────────────────────── */
 .new-rack-wrap{display:grid;gap:4px}
 .new-rack-input{border:1px solid #d9e3db;border-radius:6px;padding:10px;color:#25423b;outline-color:#5c8977;background:#fff;font-size:13px;font-family:inherit}
+/* ── Dashboard filter bar ────────────────────────────────────────────── */
+.dash-table-tools{flex-direction:column;align-items:stretch;gap:10px;padding-bottom:14px}
+.dash-filters{display:flex;flex-direction:column;gap:10px}
+.dash-filter-dropdowns{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.dash-filter-label{font-size:11px;color:#52635d;font-weight:700;display:grid;gap:5px}
+.dash-tools-right{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.dash-clear-filters{font-size:11px;color:#3e6a5c;text-decoration:underline;padding:0}
+@media(max-width:900px){.dash-filter-dropdowns{grid-template-columns:1fr 1fr}}
+@media(max-width:600px){.dash-filter-dropdowns{grid-template-columns:1fr}}
