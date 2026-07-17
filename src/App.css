@@ -128,6 +128,16 @@ main{padding:42px 48px 55px;max-width:1450px;width:100%;margin:auto}header{displ
 .inline-form-body{padding:20px 24px}
 /* ── Dashboard rack table quantity ─────────────────────────────────── */
 .dash-rack-qty{font-size:14px}
+/* ── Inline stock adjust (per-rack quick in/out) ───────────────────── */
+.adjust-cell{display:flex;align-items:center;gap:6px}
+.adjust-input{width:46px;border:1px solid #d9e3db;border-radius:6px;padding:6px 7px;font-size:13px;color:#25423b;outline-color:#5c8977;background:#fff;text-align:center;-moz-appearance:textfield}
+.adjust-input::-webkit-outer-spin-button,.adjust-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.adjust-btn{width:30px;height:30px;border:0;border-radius:7px;font-size:17px;font-weight:700;line-height:1;cursor:pointer;display:grid;place-items:center;flex-shrink:0}
+.adjust-btn:disabled{opacity:.45;cursor:not-allowed}
+.adjust-in{background:#e1f0e7;color:#2e7b54}
+.adjust-in:not(:disabled):hover{background:#cfe8d9}
+.adjust-out{background:#f9e9e3;color:#c0492c}
+.adjust-out:not(:disabled):hover{background:#f3d9cf}
 /* ── Three-column form grid for Name/Size/Type cascade ─────────────── */
 .form-grid-3{grid-template-columns:1fr 1fr 1fr}
 @media(max-width:700px){.form-grid-3{grid-template-columns:1fr}}

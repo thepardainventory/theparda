@@ -1320,6 +1320,101 @@ function Modal({
 
 type DashboardAction = 'stock_in' | 'stock_out' | null
 
+// Inline per-rack quick stock adjust: one qty box + green (+) / red (−) buttons.
+function RackAdjustCell({
+  productId,
+  name,
+  rackNumber,
+  quantity,
+  identityName,
+  onNotice,
+  onRefresh,
+}: {
+  productId: string
+  name: string
+  rackNumber: string
+  quantity: number
+  identityName: string
+  onNotice: (msg: string) => void
+  onRefresh: () => void
+}) {
+  const [qty, setQty] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  // No rack to adjust (product with no stock rows yet).
+  if (rackNumber === '—') return <span className="no-racks">—</span>
+
+  const run = async (type: 'stock_in' | 'stock_out') => {
+    if (!supabase) return
+    const n = Number(qty)
+    if (!Number.isInteger(n) || n <= 0) {
+      onNotice('Enter a valid quantity.')
+      return
+    }
+    if (type === 'stock_out' && n > quantity) {
+      onNotice(`Only ${quantity} available on rack ${rackNumber}.`)
+      return
+    }
+    setBusy(true)
+    const { error } = await supabase.from('stock_transactions').insert({
+      product_id: productId,
+      rack_number: rackNumber,
+      movement_type: type,
+      quantity: n,
+      updated_by: identityName,
+    })
+    setBusy(false)
+    if (error) {
+      onNotice(error.message)
+      return
+    }
+    onNotice(
+      `${type === 'stock_in' ? 'Stock In' : 'Stock Out'} recorded for ${name} · ${rackNumber}.`,
+    )
+    setQty('')
+    onRefresh()
+  }
+
+  return (
+    <div className="adjust-cell">
+      <input
+        className="adjust-input"
+        type="number"
+        min="1"
+        inputMode="numeric"
+        value={qty}
+        onChange={(e) => setQty(e.target.value)}
+        disabled={busy}
+        aria-label={`Quantity to adjust for ${name} rack ${rackNumber}`}
+      />
+      <button
+        type="button"
+        className="adjust-btn adjust-in"
+        onClick={() => {
+          void run('stock_in')
+        }}
+        disabled={busy || !qty}
+        title="Add to this rack"
+        aria-label={`Stock in for ${name} rack ${rackNumber}`}
+      >
+        ＋
+      </button>
+      <button
+        type="button"
+        className="adjust-btn adjust-out"
+        onClick={() => {
+          void run('stock_out')
+        }}
+        disabled={busy || !qty}
+        title="Remove from this rack"
+        aria-label={`Stock out for ${name} rack ${rackNumber}`}
+      >
+        −
+      </button>
+    </div>
+  )
+}
+
 function Dashboard({
   products,
   stockUpdates,
@@ -1613,6 +1708,7 @@ function Dashboard({
                 <th>Type</th>
                 <th>Quantity</th>
                 <th>Rack no.</th>
+                <th>Adjust stock</th>
               </tr>
             </thead>
             <tbody>
@@ -1635,12 +1731,23 @@ function Dashboard({
                       <code>{r.rackNumber}</code>
                     )}
                   </td>
+                  <td data-label="Adjust stock">
+                    <RackAdjustCell
+                      productId={r.productId}
+                      name={r.name}
+                      rackNumber={r.rackNumber}
+                      quantity={r.quantity}
+                      identityName={identityName}
+                      onNotice={onNotice}
+                      onRefresh={onRefresh}
+                    />
+                  </td>
                 </tr>
               ))}
               {filteredRackRows.length === 0 && (
                 <tr>
                   <td
-                    colSpan={5}
+                    colSpan={6}
                     style={{
                       textAlign: 'center',
                       color: 'var(--muted)',
