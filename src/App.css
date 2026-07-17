@@ -132,7 +132,8 @@ main{padding:42px 48px 55px;max-width:1450px;width:100%;margin:auto}header{displ
 .adjust-cell{display:flex;align-items:center;gap:6px}
 .adjust-input{width:46px;border:1px solid #d9e3db;border-radius:6px;padding:6px 7px;font-size:13px;color:#25423b;outline-color:#5c8977;background:#fff;text-align:center;-moz-appearance:textfield}
 .adjust-input::-webkit-outer-spin-button,.adjust-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
-.adjust-btn{width:30px;height:30px;border:0;border-radius:7px;font-size:17px;font-weight:700;line-height:1;cursor:pointer;display:grid;place-items:center;flex-shrink:0}
+.adjust-btn{height:30px;padding:0 11px;border:0;border-radius:7px;font-size:13px;font-weight:700;line-height:1;cursor:pointer;display:inline-flex;align-items:center;gap:4px;flex-shrink:0;white-space:nowrap}
+.adjust-btn span{font-size:16px}
 .adjust-btn:disabled{opacity:.45;cursor:not-allowed}
 .adjust-in{background:#e1f0e7;color:#2e7b54}
 .adjust-in:not(:disabled):hover{background:#cfe8d9}

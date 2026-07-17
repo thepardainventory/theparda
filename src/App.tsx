@@ -142,11 +142,14 @@ function toProduct(row: DbProduct, racks: DbProductRack[]): Product {
     quantity: row.quantity,
     updatedAt: fmtDate(row.updated_at),
     updatedBy: row.updated_by,
-    racks: racks.map((r) => ({
-      id: r.id,
-      rackNumber: r.rack_number,
-      quantity: r.quantity,
-    })),
+    racks: racks
+      .slice()
+      .sort((a, b) => a.rack_number.localeCompare(b.rack_number))
+      .map((r) => ({
+        id: r.id,
+        rackNumber: r.rack_number,
+        quantity: r.quantity,
+      })),
   }
 }
 
@@ -432,8 +435,13 @@ function App() {
     setFetchError('')
 
     const [prodRes, racksRes, txRes, staffRes] = await Promise.all([
-      supabase.from('products').select('*').order('name'),
-      supabase.from('product_racks').select('*'),
+      supabase
+        .from('products')
+        .select('*')
+        .order('name')
+        .order('size')
+        .order('category'),
+      supabase.from('product_racks').select('*').order('rack_number'),
       supabase
         .from('stock_transactions')
         .select('*, products(name, size, category)')
@@ -1397,7 +1405,7 @@ function RackAdjustCell({
         title="Add to this rack"
         aria-label={`Stock in for ${name} rack ${rackNumber}`}
       >
-        ＋
+        <span aria-hidden="true">＋</span> In
       </button>
       <button
         type="button"
@@ -1409,7 +1417,7 @@ function RackAdjustCell({
         title="Remove from this rack"
         aria-label={`Stock out for ${name} rack ${rackNumber}`}
       >
-        −
+        <span aria-hidden="true">−</span> Out
       </button>
     </div>
   )
