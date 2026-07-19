@@ -124,6 +124,18 @@ const sizeLabel = (size: string): string => {
   return `${trimmed} inch`
 }
 
+/**
+ * Format a raw material length value for display, appending " meter" as the
+ * unit suffix. Guards against double-appending if the value already ends
+ * with "m"/"meter"/"meters". Returns "—" for empty/blank values.
+ */
+const lengthLabel = (length: string): string => {
+  if (!length || !length.trim()) return '—'
+  const trimmed = length.trim()
+  if (/\bmeters?\s*$/i.test(trimmed)) return trimmed
+  return `${trimmed} meter`
+}
+
 /** Display identity for a product: "name · size (in) · category" */
 const productLabel = (name: string, size: string, category: string) =>
   `${name} · ${sizeLabel(size)} · ${category}`
@@ -1705,7 +1717,7 @@ function Dashboard({
         >
           <div className="metric-icon metric-icon-raw">◈</div>
           <div>
-            <strong className="metric-action-label">Add Raw Material</strong>
+            <strong className="metric-action-label">Raw Material</strong>
           </div>
         </div>
       </section>
@@ -2652,7 +2664,7 @@ function AddRawMaterialForm({
     }
     const lengthNum = Number(length)
     if (!length || !Number.isInteger(lengthNum) || lengthNum < 1) {
-      onNotice('Length must be a positive whole number (in inches).')
+      onNotice('Length must be a positive whole number (in meters).')
       return
     }
     if (!Number.isInteger(qty) || qty < 0) {
@@ -2728,21 +2740,31 @@ function AddRawMaterialForm({
             <label>
               Select Product Name
               <SearchableSelect
-                placeholder="Type to search…"
+                placeholder={
+                  nameOptions.length === 0
+                    ? 'All products already have a raw material record'
+                    : 'Type to search…'
+                }
                 options={nameOptions}
                 value={selectedName}
                 onChange={setSelectedName}
+                disabled={nameOptions.length === 0}
               />
+              {nameOptions.length === 0 && (
+                <span className="setup-copy raw-material-empty-note">
+                  Every existing product already has a raw material record. Add a new product first if you need another one.
+                </span>
+              )}
             </label>
             <label>
-              Length (inches)
+              Length (Meter)
               <input
                 type="number"
                 min="1"
                 step="1"
                 value={lengthInches}
                 onChange={(e) => setLengthInches(e.target.value)}
-                placeholder="e.g. 84"
+                placeholder="e.g. 100"
                 required
               />
             </label>
@@ -2959,8 +2981,7 @@ function RawMaterialDetail({
                   Product Name{sortIndicator('productName')}
                 </button>
               </th>
-              <th>Length (inches)</th>
-              <th>Quantity</th>
+              <th>Length (Meter)</th>
               <th>
                 <button
                   className="sort-th-btn"
@@ -2980,12 +3001,7 @@ function RawMaterialDetail({
                 <td data-label="Product Name">
                   <b>{rm.productName}</b>
                 </td>
-                <td data-label="Length (inches)">{sizeLabel(rm.lengthInches)}</td>
-                <td data-label="Quantity">
-                  <span className={`stock-count${rm.quantity === 0 ? ' low' : ''}`}>
-                    {rm.quantity}
-                  </span>
-                </td>
+                <td data-label="Length (Meter)">{lengthLabel(rm.lengthInches)}</td>
                 <td data-label="Updated Date">{rm.updatedAt}</td>
                 <td data-label="Updated By">{rm.updatedBy}</td>
                 <td data-label="Stock In / Out">
@@ -3003,7 +3019,7 @@ function RawMaterialDetail({
             {paginated.length === 0 && (
               <tr>
                 <td
-                  colSpan={6}
+                  colSpan={5}
                   style={{
                     textAlign: 'center',
                     color: 'var(--muted)',
