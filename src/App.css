@@ -164,3 +164,25 @@ main{padding:42px 48px 55px;max-width:1450px;width:100%;margin:auto}header{displ
 .dash-clear-filters{font-size:11px;color:#3e6a5c;text-decoration:underline;padding:0}
 @media(max-width:900px){.dash-filter-dropdowns{grid-template-columns:1fr 1fr}}
 @media(max-width:600px){.dash-filter-dropdowns{grid-template-columns:1fr}}
+/* ── Products page toolbar ───────────────────────────────────────────── */
+.products-toolbar-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+/* ── Bulk Stock Update modal ─────────────────────────────────────────── */
+.bulk-modal-body{display:grid;gap:16px}
+.bulk-modal-intro{margin:0;font-size:13px;color:var(--muted);line-height:1.5}
+.bulk-modal-section{display:grid;gap:8px}
+.bulk-section-label{font-size:12px;color:#52635d;font-weight:700}
+.bulk-file-label{display:grid;gap:6px;font-size:12px;color:#52635d;font-weight:700}
+.bulk-file-input{border:1px solid #d9e3db;border-radius:6px;padding:8px 10px;font-size:13px;color:#25423b;background:#fff;outline-color:#5c8977}
+.bulk-validating{margin:0;font-size:13px;color:var(--muted);font-style:italic}
+.bulk-errors{background:#fbeae6;border:1px solid #f3c9c0;border-radius:8px;padding:12px 14px;font-size:12px;color:#7a2e1e}
+.bulk-error-list{margin:8px 0 0;padding-left:18px;display:grid;gap:4px;max-height:180px;overflow-y:auto}
+.bulk-preview{background:#e8f5ec;border:1px solid #b7dfc3;border-radius:8px;padding:12px 14px;font-size:12px;color:#224d34}
+.bulk-preview-list{margin:8px 0 0;padding-left:18px;display:grid;gap:3px;max-height:180px;overflow-y:auto;font-size:12px;color:#2e5e40}
+.bulk-modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:4px}
+/* ── Bulk-update success card (persistent, dismissible) ──────────────── */
+.bulk-success-card{background:#e8f5ec;border:1px solid #7ecb9a;border-radius:10px;padding:16px 18px;margin-bottom:18px}
+.bulk-success-header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px}
+.bulk-success-header b{font-size:13px;color:#1a4a2e;line-height:1.4}
+.bulk-success-close{border:0;background:transparent;font-size:20px;line-height:1;color:#2e7b54;cursor:pointer;flex-shrink:0;padding:0}
+.bulk-success-close:hover{color:#1a4a2e}
+.bulk-success-list{margin:0;padding-left:18px;display:grid;gap:4px;font-size:12px;color:#2e5e40;line-height:1.5}
