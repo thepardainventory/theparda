@@ -682,7 +682,6 @@ function App() {
         products={products}
         rawMaterials={rawMaterials}
         identityName={identityName}
-        isAdmin={isAdmin}
         onRefresh={() => {
           void fetchAll()
         }}
@@ -1501,14 +1500,12 @@ function Dashboard({
   products,
   rawMaterials,
   identityName,
-  isAdmin,
   onRefresh,
   onNotice,
 }: {
   products: Product[]
   rawMaterials: RawMaterial[]
   identityName: string
-  isAdmin: boolean
   onRefresh: () => void
   onNotice: (msg: string) => void
 }) {
@@ -1691,28 +1688,26 @@ function Dashboard({
           </div>
         </div>
 
-        {/* Admin-only action card: Add Raw Material */}
-        {isAdmin && (
-          <div
-            className={`metric metric-clickable metric-action ${activeAction === 'add_raw_material' ? 'metric-active metric-action-raw' : ''}`}
-            role="button"
-            tabIndex={0}
-            onClick={() => toggleAction('add_raw_material')}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                toggleAction('add_raw_material')
-              }
-            }}
-            aria-pressed={activeAction === 'add_raw_material'}
-            aria-label={`Add Raw Material. Click to ${activeAction === 'add_raw_material' ? 'close' : 'open'} form.`}
-          >
-            <div className="metric-icon metric-icon-raw">◈</div>
-            <div>
-              <strong className="metric-action-label">Add Raw Material</strong>
-            </div>
+        {/* Action card: Add Raw Material */}
+        <div
+          className={`metric metric-clickable metric-action ${activeAction === 'add_raw_material' ? 'metric-active metric-action-raw' : ''}`}
+          role="button"
+          tabIndex={0}
+          onClick={() => toggleAction('add_raw_material')}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              toggleAction('add_raw_material')
+            }
+          }}
+          aria-pressed={activeAction === 'add_raw_material'}
+          aria-label={`Add Raw Material. Click to ${activeAction === 'add_raw_material' ? 'close' : 'open'} form.`}
+        >
+          <div className="metric-icon metric-icon-raw">◈</div>
+          <div>
+            <strong className="metric-action-label">Add Raw Material</strong>
           </div>
-        )}
+        </div>
       </section>
 
       {/* Inline Stock In form */}
@@ -1737,8 +1732,8 @@ function Dashboard({
         />
       )}
 
-      {/* Inline Add Raw Material form (admin only) */}
-      {activeAction === 'add_raw_material' && isAdmin && (
+      {/* Inline Add Raw Material form */}
+      {activeAction === 'add_raw_material' && (
         <AddRawMaterialForm
           products={products}
           rawMaterials={rawMaterials}
