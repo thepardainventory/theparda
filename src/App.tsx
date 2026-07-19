@@ -15,6 +15,16 @@ import './App.css'
 
 // ── DB row shapes ──────────────────────────────────────────────────────────────
 
+type DbRawMaterial = {
+  id: string
+  product_name: string
+  length_inches: string
+  quantity: number
+  updated_at: string
+  updated_by: string
+  created_at: string
+}
+
 type DbProduct = {
   id: string
   name: string
@@ -85,6 +95,15 @@ type StockUpdate = {
   date: string
 }
 
+type RawMaterial = {
+  id: string
+  productName: string
+  lengthInches: string
+  quantity: number
+  updatedAt: string
+  updatedBy: string
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const fmtDate = (iso: string) =>
@@ -152,6 +171,17 @@ function toProduct(row: DbProduct, racks: DbProductRack[]): Product {
         rackNumber: r.rack_number,
         quantity: r.quantity,
       })),
+  }
+}
+
+function toRawMaterial(row: DbRawMaterial): RawMaterial {
+  return {
+    id: row.id,
+    productName: row.product_name,
+    lengthInches: row.length_inches,
+    quantity: row.quantity,
+    updatedAt: fmtDate(row.updated_at),
+    updatedBy: row.updated_by,
   }
 }
 
@@ -344,6 +374,7 @@ type PageKey =
   | 'dashboard'
   | 'products'
   | 'history'
+  | 'raw-materials'
   | 'users'
   | 'add-product'
   | 'all-products'
@@ -353,6 +384,7 @@ function App() {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [products, setProducts] = useState<Product[]>([])
   const [stockUpdates, setStockUpdates] = useState<StockUpdate[]>([])
+  const [rawMaterials, setRawMaterials] = useState<RawMaterial[]>([])
   const [staff, setStaff] = useState<DbStaff[]>([])
   const [loading, setLoading] = useState(false)
   const [fetchError, setFetchError] = useState('')
@@ -436,7 +468,7 @@ function App() {
     setLoading(true)
     setFetchError('')
 
-    const [prodRes, racksRes, txRes, staffRes] = await Promise.all([
+    const [prodRes, racksRes, txRes, staffRes, rawMatRes] = await Promise.all([
       supabase
         .from('products')
         .select('*')
@@ -450,6 +482,7 @@ function App() {
         .order('created_at', { ascending: false })
         .limit(200),
       supabase.from('staff').select('*').eq('active', true).order('name'),
+      supabase.from('raw_materials').select('*').order('product_name'),
     ])
 
     setLoading(false)
@@ -470,6 +503,10 @@ function App() {
       setFetchError(staffRes.error.message)
       return
     }
+    if (rawMatRes.error) {
+      setFetchError(rawMatRes.error.message)
+      return
+    }
 
     const racksData = racksRes.data as DbProductRack[]
     const racksByProduct: Record<string, DbProductRack[]> = {}
@@ -487,6 +524,9 @@ function App() {
       (txRes.data as unknown as DbTransaction[]).map(toStockUpdate),
     )
     setStaff(staffRes.data as DbStaff[])
+    setRawMaterials(
+      (rawMatRes.data as DbRawMaterial[]).map(toRawMaterial),
+    )
   }
 
   useEffect(() => {
@@ -626,18 +666,30 @@ function App() {
           onNotice={setNotice}
         />
       )
+    if (page === 'raw-materials')
+      return (
+        <RawMaterialDetail
+          rawMaterials={rawMaterials}
+          identityName={identityName}
+          onRefresh={() => {
+            void fetchAll()
+          }}
+          onNotice={setNotice}
+        />
+      )
     return (
       <Dashboard
         products={products}
-        stockUpdates={stockUpdates}
+        rawMaterials={rawMaterials}
         identityName={identityName}
+        isAdmin={isAdmin}
         onRefresh={() => {
           void fetchAll()
         }}
         onNotice={setNotice}
       />
     )
-  }, [page, products, stockUpdates, filtered, search, staff]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [page, products, stockUpdates, rawMaterials, filtered, search, staff, isAdmin]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Render guards ─────────────────────────────────────────────────────────────
 
@@ -676,11 +728,13 @@ function App() {
         ? 'Products'
         : page === 'history'
           ? 'Update history'
-          : page === 'users'
-            ? 'Users'
-            : page === 'all-products'
-              ? 'All Products'
-              : 'Add product'
+          : page === 'raw-materials'
+            ? 'Raw Material Detail'
+            : page === 'users'
+              ? 'Users'
+              : page === 'all-products'
+                ? 'All Products'
+                : 'Add product'
 
   const pageSubhead =
     page === 'dashboard'
@@ -689,11 +743,13 @@ function App() {
         ? 'Find and check every product in your store.'
         : page === 'history'
           ? 'A complete record of every stock update.'
-          : page === 'users'
-            ? 'Manage your staff roster.'
-            : page === 'all-products'
-              ? 'Edit product details. Quantity is managed by stock updates.'
-              : 'Add a new product to the inventory.'
+          : page === 'raw-materials'
+            ? 'Track and adjust raw material stock.'
+            : page === 'users'
+              ? 'Manage your staff roster.'
+              : page === 'all-products'
+                ? 'Edit product details. Quantity is managed by stock updates.'
+                : 'Add a new product to the inventory.'
 
   return (
     <div className={`app-shell${mobileNavOpen ? ' nav-open' : ''}`}>
@@ -741,6 +797,12 @@ function App() {
             icon="◷"
             label="Update history"
             onClick={() => setPage('history')}
+          />
+          <Nav
+            active={page === 'raw-materials'}
+            icon="◈"
+            label="Raw Material Detail"
+            onClick={() => setPage('raw-materials')}
           />
           {isAdmin && (
             <Nav
@@ -1338,7 +1400,7 @@ function Modal({
 
 // ── Dashboard ──────────────────────────────────────────────────────────────────
 
-type DashboardAction = 'stock_in' | 'stock_out' | null
+type DashboardAction = 'stock_in' | 'stock_out' | 'add_raw_material' | null
 
 // Inline per-rack quick stock adjust: one qty box + green (+) / red (−) buttons.
 function RackAdjustCell({
@@ -1437,14 +1499,16 @@ function RackAdjustCell({
 
 function Dashboard({
   products,
-  stockUpdates,
+  rawMaterials,
   identityName,
+  isAdmin,
   onRefresh,
   onNotice,
 }: {
   products: Product[]
-  stockUpdates: StockUpdate[]
+  rawMaterials: RawMaterial[]
   identityName: string
+  isAdmin: boolean
   onRefresh: () => void
   onNotice: (msg: string) => void
 }) {
@@ -1572,8 +1636,6 @@ function Dashboard({
     filterSize !== '' ||
     filterType !== ''
 
-  const lastUpdated = stockUpdates[0]?.date ?? '—'
-
   return (
     <>
       {/* Metric cards */}
@@ -1629,14 +1691,28 @@ function Dashboard({
           </div>
         </div>
 
-        {/* Info card: Last updated */}
-        <div className="metric">
-          <div className="metric-icon">◷</div>
-          <div>
-            <span>Last updated</span>
-            <strong className="date-value">{lastUpdated}</strong>
+        {/* Admin-only action card: Add Raw Material */}
+        {isAdmin && (
+          <div
+            className={`metric metric-clickable metric-action ${activeAction === 'add_raw_material' ? 'metric-active metric-action-raw' : ''}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => toggleAction('add_raw_material')}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                toggleAction('add_raw_material')
+              }
+            }}
+            aria-pressed={activeAction === 'add_raw_material'}
+            aria-label={`Add Raw Material. Click to ${activeAction === 'add_raw_material' ? 'close' : 'open'} form.`}
+          >
+            <div className="metric-icon metric-icon-raw">◈</div>
+            <div>
+              <strong className="metric-action-label">Add Raw Material</strong>
+            </div>
           </div>
-        </div>
+        )}
       </section>
 
       {/* Inline Stock In form */}
@@ -1654,6 +1730,18 @@ function Dashboard({
       {activeAction === 'stock_out' && (
         <StockOutForm
           products={products}
+          identityName={identityName}
+          onRefresh={onRefresh}
+          onNotice={onNotice}
+          onClose={() => setActiveAction(null)}
+        />
+      )}
+
+      {/* Inline Add Raw Material form (admin only) */}
+      {activeAction === 'add_raw_material' && isAdmin && (
+        <AddRawMaterialForm
+          products={products}
+          rawMaterials={rawMaterials}
           identityName={identityName}
           onRefresh={onRefresh}
           onNotice={onNotice}
@@ -2511,6 +2599,454 @@ function StockOutForm({
           </button>
         </form>
       </div>
+    </section>
+  )
+}
+
+// ── AddRawMaterialForm ────────────────────────────────────────────────────────
+
+function AddRawMaterialForm({
+  products,
+  rawMaterials,
+  identityName,
+  onRefresh,
+  onNotice,
+  onClose,
+}: {
+  products: Product[]
+  rawMaterials: RawMaterial[]
+  identityName: string
+  onRefresh: () => void
+  onNotice: (msg: string) => void
+  onClose: () => void
+}) {
+  const [selectedName, setSelectedName] = useState('')
+  const [lengthInches, setLengthInches] = useState('')
+  const [openingQty, setOpeningQty] = useState('0')
+  const [submitting, setSubmitting] = useState(false)
+
+  // Distinct product names that do NOT already have a raw_materials row
+  const existingNames = useMemo(
+    () => new Set(rawMaterials.map((rm) => rm.productName)),
+    [rawMaterials],
+  )
+
+  const nameOptions = useMemo<SearchableSelectOption[]>(() => {
+    const seen = new Set<string>()
+    const opts: SearchableSelectOption[] = []
+    for (const p of products) {
+      if (!seen.has(p.name) && !existingNames.has(p.name)) {
+        seen.add(p.name)
+        opts.push({ value: p.name, label: p.name })
+      }
+    }
+    return opts
+  }, [products, existingNames])
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    if (!supabase) return
+
+    const name = selectedName.trim()
+    const length = lengthInches.trim()
+    const qty = Number(openingQty)
+
+    if (!name) {
+      onNotice('Select a product name.')
+      return
+    }
+    const lengthNum = Number(length)
+    if (!length || !Number.isInteger(lengthNum) || lengthNum < 1) {
+      onNotice('Length must be a positive whole number (in inches).')
+      return
+    }
+    if (!Number.isInteger(qty) || qty < 0) {
+      onNotice('Opening quantity must be a whole number of 0 or more.')
+      return
+    }
+
+    setSubmitting(true)
+
+    const { data: insertedRow, error: insertError } = await supabase
+      .from('raw_materials')
+      .insert({
+        product_name: name,
+        length_inches: length,
+        updated_by: identityName,
+      })
+      .select('id')
+      .single()
+
+    if (insertError || !insertedRow) {
+      setSubmitting(false)
+      const msg = insertError?.message ?? 'Failed to add raw material.'
+      if (insertError?.code === '23505' || msg.includes('unique')) {
+        onNotice(`A raw material for "${name}" already exists.`)
+      } else {
+        onNotice(msg)
+      }
+      return
+    }
+
+    const newId = insertedRow.id as string
+
+    if (qty > 0) {
+      const { error: txError } = await supabase
+        .from('raw_material_transactions')
+        .insert({
+          raw_material_id: newId,
+          movement_type: 'stock_in',
+          quantity: qty,
+          updated_by: identityName,
+        })
+      if (txError) {
+        setSubmitting(false)
+        onNotice(`Raw material added, but opening stock failed: ${txError.message}`)
+        onRefresh()
+        onClose()
+        return
+      }
+    }
+
+    setSubmitting(false)
+    onNotice(`Raw material "${name}" added successfully.`)
+    onClose()
+    onRefresh()
+  }
+
+  return (
+    <section className="inline-form-panel panel">
+      <div className="inline-form-heading">
+        <h3>Add Raw Material</h3>
+        <button className="text-button" onClick={onClose}>
+          Close ×
+        </button>
+      </div>
+      <div className="inline-form-body">
+        <form
+          className="form"
+          onSubmit={(e) => {
+            void handleSubmit(e)
+          }}
+        >
+          <div className="form-grid form-grid-3">
+            <label>
+              Select Product Name
+              <SearchableSelect
+                placeholder="Type to search…"
+                options={nameOptions}
+                value={selectedName}
+                onChange={setSelectedName}
+              />
+            </label>
+            <label>
+              Length (inches)
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={lengthInches}
+                onChange={(e) => setLengthInches(e.target.value)}
+                placeholder="e.g. 84"
+                required
+              />
+            </label>
+            <label>
+              Opening quantity
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={openingQty}
+                onChange={(e) => setOpeningQty(e.target.value)}
+                required
+              />
+            </label>
+          </div>
+          <button
+            className="button primary"
+            type="submit"
+            disabled={submitting || !selectedName}
+          >
+            {submitting ? 'Saving…' : 'Add Raw Material'}
+          </button>
+        </form>
+      </div>
+    </section>
+  )
+}
+
+// ── RawMaterialAdjustCell ────────────────────────────────────────────────────
+
+function RawMaterialAdjustCell({
+  rawMaterialId,
+  productName,
+  quantity,
+  identityName,
+  onNotice,
+  onRefresh,
+}: {
+  rawMaterialId: string
+  productName: string
+  quantity: number
+  identityName: string
+  onNotice: (msg: string) => void
+  onRefresh: () => void
+}) {
+  const [qty, setQty] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const run = async (type: 'stock_in' | 'stock_out') => {
+    if (!supabase) return
+    const n = Number(qty)
+    if (!Number.isInteger(n) || n <= 0) {
+      onNotice('Enter a valid quantity.')
+      return
+    }
+    if (type === 'stock_out' && n > quantity) {
+      onNotice(`Only ${quantity} available for ${productName}.`)
+      return
+    }
+    setBusy(true)
+    const { error } = await supabase.from('raw_material_transactions').insert({
+      raw_material_id: rawMaterialId,
+      movement_type: type,
+      quantity: n,
+      updated_by: identityName,
+    })
+    setBusy(false)
+    if (error) {
+      onNotice(error.message)
+      return
+    }
+    onNotice(
+      `${type === 'stock_in' ? 'Stock In' : 'Stock Out'} recorded for ${productName}.`,
+    )
+    setQty('')
+    onRefresh()
+  }
+
+  return (
+    <div className="adjust-cell">
+      <input
+        className="adjust-input"
+        type="number"
+        min="1"
+        inputMode="numeric"
+        value={qty}
+        onChange={(e) => setQty(e.target.value)}
+        disabled={busy}
+        aria-label={`Quantity to adjust for ${productName}`}
+      />
+      <button
+        type="button"
+        className="adjust-btn adjust-in"
+        onClick={() => {
+          void run('stock_in')
+        }}
+        disabled={busy || !qty}
+        title="Add stock"
+        aria-label={`Stock in for ${productName}`}
+      >
+        <span aria-hidden="true">＋</span> In
+      </button>
+      <button
+        type="button"
+        className="adjust-btn adjust-out"
+        onClick={() => {
+          void run('stock_out')
+        }}
+        disabled={busy || !qty}
+        title="Remove stock"
+        aria-label={`Stock out for ${productName}`}
+      >
+        <span aria-hidden="true">−</span> Out
+      </button>
+    </div>
+  )
+}
+
+// ── RawMaterialDetail page ────────────────────────────────────────────────────
+
+const RAW_MATERIAL_PAGE_SIZE = 10
+
+type RawMaterialSortKey = 'productName' | 'updatedAt'
+type SortDir = 'asc' | 'desc'
+
+function RawMaterialDetail({
+  rawMaterials,
+  identityName,
+  onRefresh,
+  onNotice,
+}: {
+  rawMaterials: RawMaterial[]
+  identityName: string
+  onRefresh: () => void
+  onNotice: (msg: string) => void
+}) {
+  const [search, setSearch] = useState('')
+  const [sortKey, setSortKey] = useState<RawMaterialSortKey>('productName')
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [currentPage, setCurrentPage] = useState(1)
+
+  const handleSort = (key: RawMaterialSortKey) => {
+    if (key === sortKey) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir('asc')
+    }
+    setCurrentPage(1)
+  }
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase()
+    return rawMaterials.filter((rm) =>
+      rm.productName.toLowerCase().includes(q),
+    )
+  }, [rawMaterials, search])
+
+  const sorted = useMemo(() => {
+    return [...filtered].sort((a, b) => {
+      let cmp = 0
+      if (sortKey === 'productName') {
+        cmp = a.productName.localeCompare(b.productName)
+      } else {
+        // updatedAt is already a formatted string; compare raw via original order
+        // Use localeCompare for consistent behaviour
+        cmp = a.updatedAt.localeCompare(b.updatedAt)
+      }
+      return sortDir === 'asc' ? cmp : -cmp
+    })
+  }, [filtered, sortKey, sortDir])
+
+  // Reset to page 1 when search or sort changes
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [search, sortKey, sortDir])
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / RAW_MATERIAL_PAGE_SIZE))
+  const paginated = sorted.slice(
+    (currentPage - 1) * RAW_MATERIAL_PAGE_SIZE,
+    currentPage * RAW_MATERIAL_PAGE_SIZE,
+  )
+
+  const sortIndicator = (key: RawMaterialSortKey) => {
+    if (sortKey !== key) return ' ↕'
+    return sortDir === 'asc' ? ' ↑' : ' ↓'
+  }
+
+  return (
+    <section className="panel products-panel">
+      <div className="table-tools">
+        <label className="search">
+          ⌕{' '}
+          <input
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value)
+            }}
+            placeholder="Search by product name"
+          />
+        </label>
+        <span>{filtered.length} raw materials</span>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>
+                <button
+                  className="sort-th-btn"
+                  type="button"
+                  onClick={() => handleSort('productName')}
+                >
+                  Product Name{sortIndicator('productName')}
+                </button>
+              </th>
+              <th>Length (inches)</th>
+              <th>Quantity</th>
+              <th>
+                <button
+                  className="sort-th-btn"
+                  type="button"
+                  onClick={() => handleSort('updatedAt')}
+                >
+                  Updated Date{sortIndicator('updatedAt')}
+                </button>
+              </th>
+              <th>Updated By</th>
+              <th>Stock In / Out</th>
+            </tr>
+          </thead>
+          <tbody>
+            {paginated.map((rm) => (
+              <tr key={rm.id}>
+                <td data-label="Product Name">
+                  <b>{rm.productName}</b>
+                </td>
+                <td data-label="Length (inches)">{sizeLabel(rm.lengthInches)}</td>
+                <td data-label="Quantity">
+                  <span className={`stock-count${rm.quantity === 0 ? ' low' : ''}`}>
+                    {rm.quantity}
+                  </span>
+                </td>
+                <td data-label="Updated Date">{rm.updatedAt}</td>
+                <td data-label="Updated By">{rm.updatedBy}</td>
+                <td data-label="Stock In / Out">
+                  <RawMaterialAdjustCell
+                    rawMaterialId={rm.id}
+                    productName={rm.productName}
+                    quantity={rm.quantity}
+                    identityName={identityName}
+                    onNotice={onNotice}
+                    onRefresh={onRefresh}
+                  />
+                </td>
+              </tr>
+            ))}
+            {paginated.length === 0 && (
+              <tr>
+                <td
+                  colSpan={6}
+                  style={{
+                    textAlign: 'center',
+                    color: 'var(--muted)',
+                    padding: '28px',
+                  }}
+                >
+                  {rawMaterials.length === 0
+                    ? 'No raw materials yet.'
+                    : 'No results match your search.'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {totalPages > 1 && (
+        <div className="pagination">
+          <button
+            className="pagination-btn"
+            type="button"
+            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+            disabled={currentPage === 1}
+          >
+            ← Prev
+          </button>
+          <span className="pagination-info">
+            Page {currentPage} of {totalPages}
+          </span>
+          <button
+            className="pagination-btn"
+            type="button"
+            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+            disabled={currentPage === totalPages}
+          >
+            Next →
+          </button>
+        </div>
+      )}
     </section>
   )
 }

@@ -179,6 +179,18 @@ main{padding:42px 48px 55px;max-width:1450px;width:100%;margin:auto}header{displ
 .bulk-preview{background:#e8f5ec;border:1px solid #b7dfc3;border-radius:8px;padding:12px 14px;font-size:12px;color:#224d34}
 .bulk-preview-list{margin:8px 0 0;padding-left:18px;display:grid;gap:3px;max-height:180px;overflow-y:auto;font-size:12px;color:#2e5e40}
 .bulk-modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:4px}
+/* ── Raw Material action metric card ────────────────────────────────── */
+.metric-icon-raw{background:#eee8f7;color:#6b3fa0}
+.metric-active.metric-action-raw{border-color:#6b3fa0;box-shadow:0 0 0 2px #6b3fa033}
+/* ── Sortable column header buttons ─────────────────────────────────── */
+.sort-th-btn{border:0;background:transparent;color:inherit;font:inherit;letter-spacing:inherit;text-transform:inherit;cursor:pointer;padding:0;white-space:nowrap}
+.sort-th-btn:hover{color:#254940}
+/* ── Pagination controls ─────────────────────────────────────────────── */
+.pagination{display:flex;align-items:center;justify-content:center;gap:14px;padding:14px 20px;border-top:1px solid #e9eeea}
+.pagination-btn{border:1px solid #d9e3db;background:#fff;border-radius:7px;padding:7px 14px;font-size:13px;font-weight:700;color:#254940;cursor:pointer}
+.pagination-btn:hover:not(:disabled){background:#e8eee9}
+.pagination-btn:disabled{opacity:.4;cursor:not-allowed}
+.pagination-info{font-size:13px;color:var(--muted)}
 /* ── Bulk-update success card (persistent, dismissible) ──────────────── */
 .bulk-success-card{background:#e8f5ec;border:1px solid #7ecb9a;border-radius:10px;padding:16px 18px;margin-bottom:18px}
 .bulk-success-header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:8px}
