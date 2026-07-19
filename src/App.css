@@ -198,5 +198,3 @@ main{padding:42px 48px 55px;max-width:1450px;width:100%;margin:auto}header{displ
 .bulk-success-close{border:0;background:transparent;font-size:20px;line-height:1;color:#2e7b54;cursor:pointer;flex-shrink:0;padding:0}
 .bulk-success-close:hover{color:#1a4a2e}
 .bulk-success-list{margin:0;padding-left:18px;display:grid;gap:4px;font-size:12px;color:#2e5e40;line-height:1.5}
-/* ── Raw material "all products already added" note ─────────────────── */
-.raw-material-empty-note{margin:0;font-weight:400}

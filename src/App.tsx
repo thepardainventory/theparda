@@ -1756,129 +1756,139 @@ function Dashboard({
         />
       )}
 
-      {/* Dashboard product-rack table */}
-      <section className="panel products-panel">
-        <div className="table-tools dash-table-tools">
-          <div className="dash-filters">
-            <label className="search">
-              ⌕{' '}
-              <input
-                value={dashSearch}
-                onChange={(e) => setDashSearch(e.target.value)}
-                placeholder="Search name, size or type"
-              />
-            </label>
-            <div className="dash-filter-dropdowns">
-              <label className="dash-filter-label">
-                Product Name
-                <SearchableSelect
-                  id="dash-filter-name"
-                  placeholder="All Names"
-                  options={nameFilterOptions}
-                  value={filterName}
-                  onChange={setFilterName}
+      {/* Below the metrics: either the raw material table (while the Raw Material
+          action is active) or the usual product-rack table. */}
+      {activeAction === 'add_raw_material' ? (
+        <RawMaterialDetail
+          rawMaterials={rawMaterials}
+          identityName={identityName}
+          onRefresh={onRefresh}
+          onNotice={onNotice}
+        />
+      ) : (
+        <section className="panel products-panel">
+          <div className="table-tools dash-table-tools">
+            <div className="dash-filters">
+              <label className="search">
+                ⌕{' '}
+                <input
+                  value={dashSearch}
+                  onChange={(e) => setDashSearch(e.target.value)}
+                  placeholder="Search name, size or type"
                 />
               </label>
-              <label className="dash-filter-label">
-                Size
-                <SearchableSelect
-                  id="dash-filter-size"
-                  placeholder="All Sizes"
-                  options={sizeFilterOptions}
-                  value={filterSize}
-                  onChange={setFilterSize}
-                />
-              </label>
-              <label className="dash-filter-label">
-                Type
-                <SearchableSelect
-                  id="dash-filter-type"
-                  placeholder="All Types"
-                  options={typeFilterOptions}
-                  value={filterType}
-                  onChange={setFilterType}
-                />
-              </label>
+              <div className="dash-filter-dropdowns">
+                <label className="dash-filter-label">
+                  Product Name
+                  <SearchableSelect
+                    id="dash-filter-name"
+                    placeholder="All Names"
+                    options={nameFilterOptions}
+                    value={filterName}
+                    onChange={setFilterName}
+                  />
+                </label>
+                <label className="dash-filter-label">
+                  Size
+                  <SearchableSelect
+                    id="dash-filter-size"
+                    placeholder="All Sizes"
+                    options={sizeFilterOptions}
+                    value={filterSize}
+                    onChange={setFilterSize}
+                  />
+                </label>
+                <label className="dash-filter-label">
+                  Type
+                  <SearchableSelect
+                    id="dash-filter-type"
+                    placeholder="All Types"
+                    options={typeFilterOptions}
+                    value={filterType}
+                    onChange={setFilterType}
+                  />
+                </label>
+              </div>
+            </div>
+            <div className="dash-tools-right">
+              <span>{filteredRackRows.length} rows</span>
+              {hasActiveFilters && (
+                <button
+                  className="text-button dash-clear-filters"
+                  type="button"
+                  onClick={clearFilters}
+                >
+                  Clear filters
+                </button>
+              )}
             </div>
           </div>
-          <div className="dash-tools-right">
-            <span>{filteredRackRows.length} rows</span>
-            {hasActiveFilters && (
-              <button
-                className="text-button dash-clear-filters"
-                type="button"
-                onClick={clearFilters}
-              >
-                Clear filters
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Product name</th>
-                <th>Size</th>
-                <th>Type</th>
-                <th>Quantity</th>
-                <th>Rack no.</th>
-                <th>Adjust stock</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRackRows.map((r, idx) => (
-                <tr key={`${r.productId}-${r.rackNumber}-${idx}`}>
-                  <td data-label="Product name">
-                    <b>{r.name}</b>
-                  </td>
-                  <td data-label="Size">{sizeLabel(r.size)}</td>
-                  <td data-label="Type">{r.category}</td>
-                  <td data-label="Quantity">
-                    <span className="stock-count dash-rack-qty">
-                      {r.quantity}
-                    </span>
-                  </td>
-                  <td data-label="Rack no.">
-                    {r.rackNumber === '—' ? (
-                      <span className="no-racks">—</span>
-                    ) : (
-                      <code>{r.rackNumber}</code>
-                    )}
-                  </td>
-                  <td data-label="Adjust stock">
-                    <RackAdjustCell
-                      productId={r.productId}
-                      name={r.name}
-                      rackNumber={r.rackNumber}
-                      quantity={r.quantity}
-                      identityName={identityName}
-                      onNotice={onNotice}
-                      onRefresh={onRefresh}
-                    />
-                  </td>
-                </tr>
-              ))}
-              {filteredRackRows.length === 0 && (
+          <div className="table-wrap">
+            <table>
+              <thead>
                 <tr>
-                  <td
-                    colSpan={6}
-                    style={{
-                      textAlign: 'center',
-                      color: 'var(--muted)',
-                      padding: '28px',
-                    }}
-                  >
-                    {products.length === 0
-                      ? 'No products yet.'
-                      : 'No results match your search.'}
-                  </td>
+                  <th>Product name</th>
+                  <th>Size</th>
+                  <th>Type</th>
+                  <th>Quantity</th>
+                  <th>Rack no.</th>
+                  <th>Adjust stock</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+              </thead>
+              <tbody>
+                {filteredRackRows.map((r, idx) => (
+                  <tr key={`${r.productId}-${r.rackNumber}-${idx}`}>
+                    <td data-label="Product name">
+                      <b>{r.name}</b>
+                    </td>
+                    <td data-label="Size">{sizeLabel(r.size)}</td>
+                    <td data-label="Type">{r.category}</td>
+                    <td data-label="Quantity">
+                      <span className="stock-count dash-rack-qty">
+                        {r.quantity}
+                      </span>
+                    </td>
+                    <td data-label="Rack no.">
+                      {r.rackNumber === '—' ? (
+                        <span className="no-racks">—</span>
+                      ) : (
+                        <code>{r.rackNumber}</code>
+                      )}
+                    </td>
+                    <td data-label="Adjust stock">
+                      <RackAdjustCell
+                        productId={r.productId}
+                        name={r.name}
+                        rackNumber={r.rackNumber}
+                        quantity={r.quantity}
+                        identityName={identityName}
+                        onNotice={onNotice}
+                        onRefresh={onRefresh}
+                      />
+                    </td>
+                  </tr>
+                ))}
+                {filteredRackRows.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={6}
+                      style={{
+                        textAlign: 'center',
+                        color: 'var(--muted)',
+                        padding: '28px',
+                      }}
+                    >
+                      {products.length === 0
+                        ? 'No products yet.'
+                        : 'No results match your search.'}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </>
   )
 }
@@ -2632,36 +2642,73 @@ function AddRawMaterialForm({
   const [openingQty, setOpeningQty] = useState('0')
   const [submitting, setSubmitting] = useState(false)
 
-  // Distinct product names that do NOT already have a raw_materials row
-  const existingNames = useMemo(
-    () => new Set(rawMaterials.map((rm) => rm.productName)),
-    [rawMaterials],
-  )
-
+  // All distinct product names — selecting one that already has a raw
+  // material record just adds to its existing stock instead of erroring.
   const nameOptions = useMemo<SearchableSelectOption[]>(() => {
     const seen = new Set<string>()
     const opts: SearchableSelectOption[] = []
     for (const p of products) {
-      if (!seen.has(p.name) && !existingNames.has(p.name)) {
+      if (!seen.has(p.name)) {
         seen.add(p.name)
         opts.push({ value: p.name, label: p.name })
       }
     }
     return opts
-  }, [products, existingNames])
+  }, [products])
+
+  const selectedExisting = useMemo(
+    () => rawMaterials.find((rm) => rm.productName === selectedName.trim()) ?? null,
+    [rawMaterials, selectedName],
+  )
+
+  useEffect(() => {
+    setOpeningQty('0')
+    setLengthInches(selectedExisting ? selectedExisting.lengthInches : '')
+  }, [selectedExisting])
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     if (!supabase) return
 
     const name = selectedName.trim()
-    const length = lengthInches.trim()
     const qty = Number(openingQty)
 
     if (!name) {
       onNotice('Select a product name.')
       return
     }
+
+    // ── Existing raw material: just add to its current stock ──────────────
+    if (selectedExisting) {
+      if (!Number.isInteger(qty) || qty <= 0) {
+        onNotice('Enter a quantity greater than 0 to add to the existing stock.')
+        return
+      }
+
+      setSubmitting(true)
+      const { error: txError } = await supabase
+        .from('raw_material_transactions')
+        .insert({
+          raw_material_id: selectedExisting.id,
+          movement_type: 'stock_in',
+          quantity: qty,
+          updated_by: identityName,
+        })
+      setSubmitting(false)
+
+      if (txError) {
+        onNotice(txError.message)
+        return
+      }
+
+      onNotice(`Added ${qty} meter to "${name}"'s stock.`)
+      onClose()
+      onRefresh()
+      return
+    }
+
+    // ── New product: create the raw material record ───────────────────────
+    const length = lengthInches.trim()
     const lengthNum = Number(length)
     if (!length || !Number.isInteger(lengthNum) || lengthNum < 1) {
       onNotice('Length must be a positive whole number (in meters).')
@@ -2740,21 +2787,11 @@ function AddRawMaterialForm({
             <label>
               Select Product Name
               <SearchableSelect
-                placeholder={
-                  nameOptions.length === 0
-                    ? 'All products already have a raw material record'
-                    : 'Type to search…'
-                }
+                placeholder="Type to search…"
                 options={nameOptions}
                 value={selectedName}
                 onChange={setSelectedName}
-                disabled={nameOptions.length === 0}
               />
-              {nameOptions.length === 0 && (
-                <span className="setup-copy raw-material-empty-note">
-                  Every existing product already has a raw material record. Add a new product first if you need another one.
-                </span>
-              )}
             </label>
             <label>
               Length (Meter)
@@ -2765,14 +2802,15 @@ function AddRawMaterialForm({
                 value={lengthInches}
                 onChange={(e) => setLengthInches(e.target.value)}
                 placeholder="e.g. 100"
-                required
+                required={!selectedExisting}
+                disabled={!!selectedExisting}
               />
             </label>
             <label>
-              Opening quantity
+              {selectedExisting ? 'Quantity to add' : 'Opening quantity'}
               <input
                 type="number"
-                min="0"
+                min={selectedExisting ? '1' : '0'}
                 step="1"
                 value={openingQty}
                 onChange={(e) => setOpeningQty(e.target.value)}
@@ -2785,7 +2823,13 @@ function AddRawMaterialForm({
             type="submit"
             disabled={submitting || !selectedName}
           >
-            {submitting ? 'Saving…' : 'Add Raw Material'}
+            {submitting
+              ? selectedExisting
+                ? 'Adding…'
+                : 'Saving…'
+              : selectedExisting
+                ? 'Add Stock'
+                : 'Add Raw Material'}
           </button>
         </form>
       </div>
