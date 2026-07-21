@@ -387,6 +387,7 @@ type PageKey =
   | 'products'
   | 'history'
   | 'raw-materials'
+  | 'returned-stock'
   | 'users'
   | 'add-product'
   | 'all-products'
@@ -910,6 +911,17 @@ function App() {
           onNotice={setNotice}
         />
       )
+    if (page === 'returned-stock')
+      return (
+        <ReturnedStockPage
+          products={products}
+          identityName={identityName}
+          onRefresh={() => {
+            void fetchAll()
+          }}
+          onNotice={setNotice}
+        />
+      )
     return (
       <Dashboard
         products={products}
@@ -962,11 +974,13 @@ function App() {
           ? 'Update history'
           : page === 'raw-materials'
             ? 'Raw Material Detail'
-            : page === 'users'
-              ? 'Users'
-              : page === 'all-products'
-                ? 'All Products'
-                : 'Add product'
+            : page === 'returned-stock'
+              ? 'Update Returned Stock'
+              : page === 'users'
+                ? 'Users'
+                : page === 'all-products'
+                  ? 'All Products'
+                  : 'Add product'
 
   const pageSubhead =
     page === 'dashboard'
@@ -977,11 +991,13 @@ function App() {
           ? 'A complete record of every stock update.'
           : page === 'raw-materials'
             ? 'Track and adjust raw material stock.'
-            : page === 'users'
-              ? 'Manage your staff roster.'
-              : page === 'all-products'
-                ? 'Edit product details. Quantity is managed by stock updates.'
-                : 'Add a new product to the inventory.'
+            : page === 'returned-stock'
+              ? 'Add returned stock back into inventory across multiple products at once.'
+              : page === 'users'
+                ? 'Manage your staff roster.'
+                : page === 'all-products'
+                  ? 'Edit product details. Quantity is managed by stock updates.'
+                  : 'Add a new product to the inventory.'
 
   return (
     <div className={`app-shell${mobileNavOpen ? ' nav-open' : ''}`}>
@@ -1035,6 +1051,12 @@ function App() {
             icon="◈"
             label="Raw Material Detail"
             onClick={() => setPage('raw-materials')}
+          />
+          <Nav
+            active={page === 'returned-stock'}
+            icon="↺"
+            label="Update Returned Stock"
+            onClick={() => setPage('returned-stock')}
           />
           {isAdmin && (
             <Nav
@@ -3378,6 +3400,416 @@ function RawMaterialDetail({
           </button>
         </div>
       )}
+    </section>
+  )
+}
+
+// ── Returned Stock page ───────────────────────────────────────────────────────
+
+const RETURNED_STOCK_SIZES = ['2', '3', '4', '5', '6', '7', '8', '9', '10']
+
+type ReturnedStockRow = {
+  id: number
+  name: string
+  size: string
+  category: string
+  quantity: string
+  rackNumber: string
+  useNewRack: boolean
+  newRackInput: string
+}
+
+function makeEmptyReturnedStockRow(id: number): ReturnedStockRow {
+  return {
+    id,
+    name: '',
+    size: '',
+    category: '',
+    quantity: '',
+    rackNumber: '',
+    useNewRack: false,
+    newRackInput: '',
+  }
+}
+
+function ReturnedStockPage({
+  products,
+  identityName,
+  onRefresh,
+  onNotice,
+}: {
+  products: Product[]
+  identityName: string
+  onRefresh: () => void
+  onNotice: (msg: string) => void
+}) {
+  const nextRowId = useRef(2)
+  const [rows, setRows] = useState<ReturnedStockRow[]>([
+    makeEmptyReturnedStockRow(1),
+  ])
+  const [errors, setErrors] = useState<string[]>([])
+  const [submitting, setSubmitting] = useState(false)
+
+  // All distinct product names.
+  const nameOptions = useMemo<SearchableSelectOption[]>(() => {
+    const seen = new Set<string>()
+    const opts: SearchableSelectOption[] = []
+    for (const p of products) {
+      if (!seen.has(p.name)) {
+        seen.add(p.name)
+        opts.push({ value: p.name, label: p.name })
+      }
+    }
+    return opts
+  }, [products])
+
+  // Fixed size range 2–10, independent of the selected product.
+  const sizeOptions = useMemo<SearchableSelectOption[]>(
+    () => RETURNED_STOCK_SIZES.map((s) => ({ value: s, label: sizeLabel(s) })),
+    [],
+  )
+
+  // All distinct categories already in use, independent of name/size.
+  const categoryOptions = useMemo<SearchableSelectOption[]>(() => {
+    const seen = new Set<string>()
+    const opts: SearchableSelectOption[] = []
+    for (const p of products) {
+      if (!seen.has(p.category)) {
+        seen.add(p.category)
+        opts.push({ value: p.category, label: p.category })
+      }
+    }
+    return opts
+  }, [products])
+
+  // All distinct rack numbers across every product — used as the Rack No.
+  // dropdown's fallback list before a specific product has been resolved.
+  const allRackNumbers = useMemo<string[]>(() => {
+    const seen = new Set<string>()
+    for (const p of products) {
+      for (const r of p.racks) seen.add(r.rackNumber)
+    }
+    return [...seen].sort()
+  }, [products])
+
+  const updateRow = (id: number, patch: Partial<ReturnedStockRow>) => {
+    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)))
+  }
+
+  const handleNameChange = (id: number, name: string) => {
+    updateRow(id, {
+      name,
+      size: '',
+      category: '',
+      rackNumber: '',
+      useNewRack: false,
+      newRackInput: '',
+    })
+  }
+
+  const handleSizeChange = (id: number, size: string) => {
+    updateRow(id, { size, rackNumber: '', useNewRack: false, newRackInput: '' })
+  }
+
+  const handleCategoryChange = (id: number, category: string) => {
+    updateRow(id, { category, rackNumber: '', useNewRack: false, newRackInput: '' })
+  }
+
+  const handleRackChange = (id: number, val: string) => {
+    if (val === '__new__') {
+      updateRow(id, { useNewRack: true, rackNumber: '', newRackInput: '' })
+    } else {
+      updateRow(id, { useNewRack: false, rackNumber: val, newRackInput: '' })
+    }
+  }
+
+  const addRow = () => {
+    const id = nextRowId.current
+    nextRowId.current += 1
+    setRows((prev) => [...prev, makeEmptyReturnedStockRow(id)])
+  }
+
+  const removeRow = (id: number) => {
+    setRows((prev) => (prev.length > 1 ? prev.filter((r) => r.id !== id) : prev))
+  }
+
+  const isRowEmpty = (row: ReturnedStockRow) =>
+    !row.name.trim() &&
+    !row.size.trim() &&
+    !row.category.trim() &&
+    !row.quantity.trim() &&
+    !row.rackNumber.trim() &&
+    !row.newRackInput.trim()
+
+  const handleUpdate = async () => {
+    if (!supabase) return
+
+    const nonEmptyRows = rows.filter((r) => !isRowEmpty(r))
+
+    if (nonEmptyRows.length === 0) {
+      setErrors([])
+      onNotice('Add at least one row of returned stock to update.')
+      return
+    }
+
+    const rowErrors: string[] = []
+    const prepared: {
+      rowNum: number
+      name: string
+      size: string
+      category: string
+      quantity: number
+      rack: string
+      existingProductId: string | null
+    }[] = []
+
+    nonEmptyRows.forEach((row, i) => {
+      const rowNum = i + 1
+
+      if (!row.name || !row.size || !row.category) {
+        rowErrors.push(`Row ${rowNum}: select a product name, size, and type.`)
+        return
+      }
+
+      const qty = Number(row.quantity)
+      if (!Number.isInteger(qty) || qty <= 0) {
+        rowErrors.push(`Row ${rowNum}: enter a valid quantity (positive whole number).`)
+        return
+      }
+
+      const matched = products.find(
+        (p) => p.name === row.name && p.size === row.size && p.category === row.category,
+      )
+      const knownRacks = matched ? matched.racks : []
+      const showNewRackInput = row.useNewRack || knownRacks.length === 0
+      const effectiveRack = showNewRackInput ? row.newRackInput.trim() : row.rackNumber
+
+      if (!effectiveRack) {
+        rowErrors.push(`Row ${rowNum}: select or enter a rack number.`)
+        return
+      }
+
+      prepared.push({
+        rowNum,
+        name: row.name,
+        size: row.size,
+        category: row.category,
+        quantity: qty,
+        rack: effectiveRack,
+        existingProductId: matched?.id ?? null,
+      })
+    })
+
+    if (rowErrors.length > 0) {
+      setErrors(rowErrors)
+      return
+    }
+
+    setErrors([])
+    setSubmitting(true)
+
+    // Resolve a product id for every row, creating the product first when its
+    // Name+Size+Type combo doesn't exist yet. Dedupe new combos within this
+    // submission so the same brand-new product isn't inserted twice.
+    const createdIds = new Map<string, string>()
+    const comboKey = (name: string, size: string, category: string) =>
+      `${name} ${size} ${category}`
+
+    for (const item of prepared) {
+      if (item.existingProductId) continue
+      const key = comboKey(item.name, item.size, item.category)
+      const already = createdIds.get(key)
+      if (already) continue
+
+      const { data, error: createError } = await supabase
+        .from('products')
+        .insert({
+          name: item.name,
+          size: item.size,
+          category: item.category,
+          updated_by: identityName,
+        })
+        .select('id')
+        .single()
+
+      if (createError || !data) {
+        setSubmitting(false)
+        setErrors([
+          `Row ${item.rowNum}: failed to create product "${item.name} · ${sizeLabel(item.size)} · ${item.category}" — ${createError?.message ?? 'unknown error'}.`,
+        ])
+        return
+      }
+
+      createdIds.set(key, data.id as string)
+    }
+
+    const insertPayload = prepared.map((item) => ({
+      product_id:
+        item.existingProductId ?? createdIds.get(comboKey(item.name, item.size, item.category))!,
+      rack_number: item.rack,
+      movement_type: 'stock_in' as const,
+      quantity: item.quantity,
+      updated_by: identityName,
+    }))
+
+    const { error } = await supabase.from('stock_transactions').insert(insertPayload)
+    setSubmitting(false)
+
+    if (error) {
+      setErrors([error.message])
+      return
+    }
+
+    onNotice(
+      `Returned stock updated for ${insertPayload.length} ${insertPayload.length === 1 ? 'item' : 'items'}.`,
+    )
+    nextRowId.current = 2
+    setRows([makeEmptyReturnedStockRow(1)])
+    onRefresh()
+  }
+
+  return (
+    <section className="panel products-panel returned-stock-panel">
+      <div className="returned-stock-grid">
+        <div className="returned-stock-head">Product Name</div>
+        <div className="returned-stock-head">Size</div>
+        <div className="returned-stock-head">Type</div>
+        <div className="returned-stock-head">Quantity</div>
+        <div className="returned-stock-head">Rack No.</div>
+        <div className="returned-stock-head" aria-hidden="true" />
+
+        {rows.map((row) => {
+          const matched = products.find(
+            (p) => p.name === row.name && p.size === row.size && p.category === row.category,
+          )
+          // Once the product resolves, list its own racks; otherwise fall
+          // back to every rack number already in use so the field is never
+          // disabled while Name/Size/Type are still being picked.
+          const knownRackNumbers = matched
+            ? matched.racks.map((r) => ({
+                value: r.rackNumber,
+                label: `${r.rackNumber} (${r.quantity} in stock)`,
+              }))
+            : allRackNumbers.map((rn) => ({ value: rn, label: rn }))
+          const rackOptions: SearchableSelectOption[] = [
+            ...knownRackNumbers,
+            { value: '__new__', label: '+ Add new rack' },
+          ]
+          const showNewRackInput = row.useNewRack || knownRackNumbers.length === 0
+
+          return (
+            <div key={row.id} className="returned-stock-row" style={{ display: 'contents' }}>
+              <div className="returned-stock-cell">
+                <SearchableSelect
+                  placeholder="Type to search…"
+                  options={nameOptions}
+                  value={row.name}
+                  onChange={(v) => handleNameChange(row.id, v)}
+                />
+              </div>
+              <div className="returned-stock-cell">
+                <SearchableSelect
+                  placeholder="Choose size…"
+                  options={sizeOptions}
+                  value={row.size}
+                  onChange={(v) => handleSizeChange(row.id, v)}
+                />
+              </div>
+              <div className="returned-stock-cell">
+                <SearchableSelect
+                  placeholder="Choose type…"
+                  options={categoryOptions}
+                  value={row.category}
+                  onChange={(v) => handleCategoryChange(row.id, v)}
+                />
+              </div>
+              <div className="returned-stock-cell">
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  className="returned-stock-qty"
+                  value={row.quantity}
+                  onChange={(e) => updateRow(row.id, { quantity: e.target.value })}
+                  placeholder="e.g. 10"
+                />
+              </div>
+              <div className="returned-stock-cell">
+                {showNewRackInput ? (
+                  <div className="new-rack-wrap">
+                    <input
+                      className="new-rack-input"
+                      placeholder="e.g. A-01"
+                      value={row.newRackInput}
+                      onChange={(e) => updateRow(row.id, { newRackInput: e.target.value })}
+                    />
+                    {knownRackNumbers.length > 0 && (
+                      <button
+                        type="button"
+                        className="rack-cancel-new"
+                        onClick={() =>
+                          updateRow(row.id, { useNewRack: false, newRackInput: '' })
+                        }
+                      >
+                        Cancel — pick existing
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <SearchableSelect
+                    placeholder="Select a rack…"
+                    options={rackOptions}
+                    value={row.rackNumber}
+                    onChange={(v) => handleRackChange(row.id, v)}
+                  />
+                )}
+              </div>
+              <div className="returned-stock-cell returned-stock-remove-cell">
+                {rows.length > 1 && (
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => removeRow(row.id)}
+                    aria-label="Remove row"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="returned-stock-add-row">
+        <button className="button secondary" type="button" onClick={addRow}>
+          + Add Row
+        </button>
+      </div>
+
+      {errors.length > 0 && (
+        <div className="bulk-errors" role="alert">
+          <b>Fix the following before updating:</b>
+          <ul className="bulk-error-list">
+            {errors.map((err, i) => (
+              <li key={i}>{err}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="returned-stock-actions">
+        <button
+          className="button primary"
+          type="button"
+          onClick={() => {
+            void handleUpdate()
+          }}
+          disabled={submitting}
+        >
+          {submitting ? 'Updating…' : 'Update'}
+        </button>
+      </div>
     </section>
   )
 }

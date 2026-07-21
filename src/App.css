@@ -126,6 +126,16 @@ main{padding:42px 48px 55px;max-width:1450px;width:100%;margin:auto}header{displ
 .inline-form-heading{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #edf0ed}
 .inline-form-heading h3{font:700 16px 'Playfair Display',serif;margin:0;color:#29453e}
 .inline-form-body{padding:20px 24px}
+/* ── Returned stock multi-row update page ──────────────────────────── */
+.returned-stock-panel{padding:22px 24px;overflow:visible}
+.returned-stock-grid{display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr 1.4fr 30px;gap:10px 12px;align-items:start}
+.returned-stock-head{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:#718179;font-weight:700;padding-bottom:6px}
+.returned-stock-cell{padding:4px 0}
+.returned-stock-qty{width:100%;box-sizing:border-box;border:1px solid #d9e3db;border-radius:6px;padding:10px;color:#25423b;font-size:13px;outline-color:#5c8977;background:#fff}
+.returned-stock-remove-cell{display:flex;align-items:center;justify-content:center;padding-top:10px}
+.returned-stock-remove-cell .text-button{font-size:18px;line-height:1;color:#a94e28}
+.returned-stock-add-row{margin-top:14px}
+.returned-stock-actions{margin-top:18px;display:flex;justify-content:flex-end}
 /* ── Dashboard rack table quantity ─────────────────────────────────── */
 .dash-rack-qty{font-size:14px}
 /* ── Inline stock adjust (per-rack quick in/out) ───────────────────── */
