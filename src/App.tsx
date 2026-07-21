@@ -632,6 +632,231 @@ function App() {
     await fetchAll()
   }
 
+  // ── Bulk stock update + export (shared by Dashboard and Products) ────────────
+
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkValidating, setBulkValidating] = useState(false)
+  const [bulkErrors, setBulkErrors] = useState<string[]>([])
+  const [bulkRows, setBulkRows] = useState<BulkRow[] | null>(null)
+  const [bulkSubmitting, setBulkSubmitting] = useState(false)
+  const [bulkModalError, setBulkModalError] = useState('')
+  const [bulkSuccess, setBulkSuccess] = useState<BulkSuccess | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const resetBulkModal = () => {
+    setBulkErrors([])
+    setBulkRows(null)
+    setBulkModalError('')
+    setBulkValidating(false)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const openBulkModal = () => {
+    resetBulkModal()
+    setBulkOpen(true)
+  }
+
+  const closeBulkModal = () => {
+    setBulkOpen(false)
+    resetBulkModal()
+  }
+
+  const downloadTemplate = () => {
+    const example =
+      products.length > 0
+        ? [products[0].name, products[0].size, products[0].category, 10, 'A-01']
+        : ['Sand', '84', 'Blackout', 10, 'A-01']
+
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['Product Name', 'Size', 'Type', 'Quantity', 'Rack No'],
+      example,
+    ])
+    ws['!cols'] = [
+      { wch: 28 },
+      { wch: 10 },
+      { wch: 18 },
+      { wch: 12 },
+      { wch: 12 },
+    ]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Stock Update')
+    XLSX.writeFile(wb, 'parda-bulk-stock-template.xlsx')
+  }
+
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+    if (ext !== 'xlsx' && ext !== 'xls') {
+      setBulkErrors(['Only .xlsx or .xls files are accepted.'])
+      setBulkRows(null)
+      return
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setBulkErrors([`File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum allowed size is 5 MB.`])
+      setBulkRows(null)
+      return
+    }
+
+    setBulkValidating(true)
+    setBulkErrors([])
+    setBulkRows(null)
+    setBulkModalError('')
+
+    const reader = new FileReader()
+    reader.onload = (evt) => {
+      try {
+        const arrayBuffer = evt.target?.result as ArrayBuffer
+        const wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' })
+        const sheetName = wb.SheetNames[0]
+        if (!sheetName) {
+          setBulkErrors(['The uploaded file contains no sheets.'])
+          setBulkValidating(false)
+          return
+        }
+        const ws = wb.Sheets[sheetName]
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const raw: Record<string, any>[] = XLSX.utils.sheet_to_json(ws, { defval: '' })
+
+        const errors: string[] = []
+        const validRows: BulkRow[] = []
+
+        for (let i = 0; i < raw.length; i++) {
+          const row = raw[i]
+          const spreadsheetRow = i + 2
+
+          const name = String(row['Product Name'] ?? '').trim()
+          const size = String(row['Size'] ?? '').trim()
+          const type = String(row['Type'] ?? '').trim()
+          const quantityRaw = row['Quantity']
+          const rackNo = String(row['Rack No'] ?? '').trim()
+
+          const matched = products.find(
+            (p) =>
+              p.name === name &&
+              String(p.size).trim() === size &&
+              p.category === type,
+          )
+          if (!matched) {
+            errors.push(
+              `Row ${spreadsheetRow}: Product not found — "${name} / ${size} / ${type}"`,
+            )
+          }
+
+          const qty = Number(quantityRaw)
+          if (!Number.isInteger(qty) || qty <= 0) {
+            errors.push(`Row ${spreadsheetRow}: Invalid quantity (must be a positive whole number).`)
+          }
+
+          if (!rackNo) {
+            errors.push(`Row ${spreadsheetRow}: Rack No is required.`)
+          }
+
+          if (matched && Number.isInteger(qty) && qty > 0 && rackNo) {
+            validRows.push({
+              productId: matched.id,
+              productName: matched.name,
+              size: matched.size,
+              category: matched.category,
+              quantity: qty,
+              rackNumber: rackNo,
+            })
+          }
+        }
+
+        if (raw.length === 0) {
+          errors.push('The spreadsheet has no data rows (only a header row or is empty).')
+        }
+
+        setBulkErrors(errors)
+        setBulkRows(errors.length === 0 ? validRows : null)
+      } catch {
+        setBulkErrors(['Failed to parse the file. Make sure it is a valid .xlsx/.xls file.'])
+        setBulkRows(null)
+      } finally {
+        setBulkValidating(false)
+      }
+    }
+    reader.onerror = () => {
+      setBulkErrors(['Could not read the file.'])
+      setBulkValidating(false)
+    }
+    reader.readAsArrayBuffer(file)
+  }
+
+  const handleBulkConfirm = async () => {
+    if (!bulkRows || bulkRows.length === 0) return
+    if (!supabase) {
+      setBulkModalError('Supabase client not initialised — check environment variables.')
+      return
+    }
+
+    setBulkSubmitting(true)
+    setBulkModalError('')
+
+    const insertPayload = bulkRows.map((r) => ({
+      product_id: r.productId,
+      rack_number: r.rackNumber,
+      movement_type: 'stock_in' as const,
+      quantity: r.quantity,
+      updated_by: identityName,
+    }))
+
+    const { error } = await supabase.from('stock_transactions').insert(insertPayload)
+    setBulkSubmitting(false)
+
+    if (error) {
+      setBulkModalError(error.message)
+      return
+    }
+
+    const successItems = bulkRows.map(
+      (r) => `${r.productName} · ${sizeLabel(r.size)} · ${r.category} — +${r.quantity} to rack ${r.rackNumber}`,
+    )
+    setBulkSuccess({ count: bulkRows.length, items: successItems })
+    closeBulkModal()
+    await fetchAll()
+  }
+
+  const handleExport = () => {
+    const exportProducts = products
+
+    const colWidths = [
+      Math.max(14, ...exportProducts.map((p) => p.name.length)) + 2,
+      8,
+      Math.max(6, ...exportProducts.map((p) => p.category.length)) + 2,
+      10,
+      Math.max(8, ...exportProducts.map((p) =>
+        p.racks.length === 0 ? 1 : p.racks.map((r) => `${r.rackNumber} · ${r.quantity}`).join(', ').length,
+      )) + 2,
+    ]
+
+    const headerRow = ['Product Name', 'Size', 'Type', 'Quantity', 'Rack No.']
+    const dataRows = exportProducts.map((p) => [
+      p.name,
+      p.size,
+      p.category,
+      p.quantity,
+      p.racks.length === 0
+        ? '—'
+        : p.racks.map((r) => `${r.rackNumber} · ${r.quantity}`).join(', '),
+    ])
+
+    const ws = XLSX.utils.aoa_to_sheet([headerRow, ...dataRows])
+    ws['!cols'] = colWidths.map((wch) => ({ wch }))
+
+    if (ws['!ref']) {
+      ws['!autofilter'] = { ref: ws['!ref'] }
+    }
+
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Inventory')
+
+    const today = new Date().toISOString().slice(0, 10)
+    XLSX.writeFile(wb, `parda-inventory-export-${today}.xlsx`)
+  }
+
   // ── Content memo ──────────────────────────────────────────────────────────────
 
   const content = useMemo(() => {
@@ -650,14 +875,10 @@ function App() {
       return (
         <Products
           products={filtered}
-          allProducts={products}
           search={search}
           setSearch={setSearch}
-          identityName={identityName}
-          onRefresh={() => {
-            void fetchAll()
-          }}
-          onNotice={setNotice}
+          onOpenBulkModal={openBulkModal}
+          onExport={handleExport}
         />
       )
     if (page === 'add-product')
@@ -867,7 +1088,128 @@ function App() {
             <h1>{pageTitle}</h1>
             <p className="subhead">{pageSubhead}</p>
           </div>
+          {page === 'dashboard' && (
+            <div className="header-actions">
+              <button className="button secondary" type="button" onClick={openBulkModal}>
+                Update Stock
+              </button>
+              <button className="button secondary" type="button" onClick={handleExport}>
+                Export Data
+              </button>
+            </div>
+          )}
         </header>
+
+        {/* Persistent bulk-update success card — shared by Dashboard and Products */}
+        {bulkSuccess && (
+          <div className="bulk-success-card" role="status">
+            <div className="bulk-success-header">
+              <b>Bulk stock update complete — {bulkSuccess.count} {bulkSuccess.count === 1 ? 'item' : 'items'} updated</b>
+              <button
+                className="bulk-success-close"
+                onClick={() => setBulkSuccess(null)}
+                aria-label="Dismiss success message"
+              >
+                ×
+              </button>
+            </div>
+            <ul className="bulk-success-list">
+              {bulkSuccess.items.map((item, i) => (
+                <li key={i}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Bulk Stock Update modal — shared by Dashboard and Products */}
+        {bulkOpen && (
+          <Modal title="Bulk Stock Update" onClose={closeBulkModal}>
+            <div className="bulk-modal-body">
+              <p className="bulk-modal-intro">
+                Download the template, fill in your stock data, then upload the completed file to update stock in one go. All rows are inserted as a single database transaction.
+              </p>
+
+              <div className="bulk-modal-section">
+                <b className="bulk-section-label">Step 1 — Download the template</b>
+                <button
+                  className="button secondary"
+                  type="button"
+                  onClick={downloadTemplate}
+                >
+                  Download Sample Template
+                </button>
+              </div>
+
+              <div className="bulk-modal-section">
+                <b className="bulk-section-label">Step 2 — Upload your filled file</b>
+                <label className="bulk-file-label">
+                  <span>Choose .xlsx or .xls file (max 5 MB)</span>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={handleFileChange}
+                    className="bulk-file-input"
+                    disabled={bulkSubmitting}
+                  />
+                </label>
+              </div>
+
+              {bulkValidating && (
+                <p className="bulk-validating">Validating…</p>
+              )}
+
+              {bulkErrors.length > 0 && (
+                <div className="bulk-errors" role="alert">
+                  <b>Fix the following errors before uploading again:</b>
+                  <ul className="bulk-error-list">
+                    {bulkErrors.map((err, i) => (
+                      <li key={i}>{err}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {bulkRows && bulkErrors.length === 0 && (
+                <div className="bulk-preview" role="status">
+                  <b>{bulkRows.length} {bulkRows.length === 1 ? 'row' : 'rows'} validated successfully.</b>
+                  <ul className="bulk-preview-list">
+                    {bulkRows.map((r, i) => (
+                      <li key={i}>
+                        {r.productName} · {sizeLabel(r.size)} · {r.category} — +{r.quantity} to rack {r.rackNumber}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {bulkModalError && (
+                <div className="fetch-error" role="alert" style={{ marginTop: '10px' }}>
+                  <b>Error:</b> {bulkModalError}
+                </div>
+              )}
+
+              <div className="bulk-modal-actions">
+                <button
+                  className="button secondary"
+                  type="button"
+                  onClick={closeBulkModal}
+                  disabled={bulkSubmitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="button primary"
+                  type="button"
+                  onClick={() => { void handleBulkConfirm() }}
+                  disabled={!bulkRows || bulkRows.length === 0 || bulkSubmitting || bulkValidating}
+                >
+                  {bulkSubmitting ? 'Updating…' : 'Confirm'}
+                </button>
+              </div>
+            </div>
+          </Modal>
+        )}
 
         {loading && (
           <div className="loading-bar" role="status" aria-label="Loading data">
@@ -2638,12 +2980,11 @@ function AddRawMaterialForm({
   onClose: () => void
 }) {
   const [selectedName, setSelectedName] = useState('')
-  const [lengthInches, setLengthInches] = useState('')
-  const [openingQty, setOpeningQty] = useState('0')
+  const [lengthMeters, setLengthMeters] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  // All distinct product names — selecting one that already has a raw
-  // material record just adds to its existing stock instead of erroring.
+  // All distinct product names — selecting one just adds meters to its
+  // raw material stock (creating the raw material record first if needed).
   const nameOptions = useMemo<SearchableSelectOption[]>(() => {
     const seen = new Set<string>()
     const opts: SearchableSelectOption[] = []
@@ -2656,44 +2997,37 @@ function AddRawMaterialForm({
     return opts
   }, [products])
 
-  const selectedExisting = useMemo(
-    () => rawMaterials.find((rm) => rm.productName === selectedName.trim()) ?? null,
-    [rawMaterials, selectedName],
-  )
-
-  useEffect(() => {
-    setOpeningQty('0')
-    setLengthInches(selectedExisting ? selectedExisting.lengthInches : '')
-  }, [selectedExisting])
-
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     if (!supabase) return
 
     const name = selectedName.trim()
-    const qty = Number(openingQty)
 
     if (!name) {
       onNotice('Select a product name.')
       return
     }
+    const lengthNum = Number(lengthMeters)
+    if (!lengthMeters || !Number.isInteger(lengthNum) || lengthNum < 1) {
+      onNotice('Length must be a positive whole number (in meters).')
+      return
+    }
 
-    // ── Existing raw material: just add to its current stock ──────────────
-    if (selectedExisting) {
-      if (!Number.isInteger(qty) || qty <= 0) {
-        onNotice('Enter a quantity greater than 0 to add to the existing stock.')
-        return
-      }
+    setSubmitting(true)
 
-      setSubmitting(true)
+    const existing = rawMaterials.find((rm) => rm.productName === name)
+
+    if (existing) {
+      // Already tracked — add to its existing stock via a stock-in movement.
       const { error: txError } = await supabase
         .from('raw_material_transactions')
         .insert({
-          raw_material_id: selectedExisting.id,
+          raw_material_id: existing.id,
           movement_type: 'stock_in',
-          quantity: qty,
+          quantity: lengthNum,
           updated_by: identityName,
         })
+
       setSubmitting(false)
 
       if (txError) {
@@ -2701,70 +3035,28 @@ function AddRawMaterialForm({
         return
       }
 
-      onNotice(`Added ${qty} meter to "${name}"'s stock.`)
-      onClose()
-      onRefresh()
-      return
-    }
-
-    // ── New product: create the raw material record ───────────────────────
-    const length = lengthInches.trim()
-    const lengthNum = Number(length)
-    if (!length || !Number.isInteger(lengthNum) || lengthNum < 1) {
-      onNotice('Length must be a positive whole number (in meters).')
-      return
-    }
-    if (!Number.isInteger(qty) || qty < 0) {
-      onNotice('Opening quantity must be a whole number of 0 or more.')
-      return
-    }
-
-    setSubmitting(true)
-
-    const { data: insertedRow, error: insertError } = await supabase
-      .from('raw_materials')
-      .insert({
+      onNotice(`Added ${lengthNum} meter to "${name}".`)
+    } else {
+      // First time tracking this product's raw material — create its row.
+      const { error: insertError } = await supabase.from('raw_materials').insert({
         product_name: name,
-        length_inches: length,
+        length_inches: String(lengthNum),
+        quantity: lengthNum,
         updated_by: identityName,
       })
-      .select('id')
-      .single()
 
-    if (insertError || !insertedRow) {
       setSubmitting(false)
-      const msg = insertError?.message ?? 'Failed to add raw material.'
-      if (insertError?.code === '23505' || msg.includes('unique')) {
-        onNotice(`A raw material for "${name}" already exists.`)
-      } else {
-        onNotice(msg)
-      }
-      return
-    }
 
-    const newId = insertedRow.id as string
-
-    if (qty > 0) {
-      const { error: txError } = await supabase
-        .from('raw_material_transactions')
-        .insert({
-          raw_material_id: newId,
-          movement_type: 'stock_in',
-          quantity: qty,
-          updated_by: identityName,
-        })
-      if (txError) {
-        setSubmitting(false)
-        onNotice(`Raw material added, but opening stock failed: ${txError.message}`)
-        onRefresh()
-        onClose()
+      if (insertError) {
+        onNotice(insertError.message)
         return
       }
+
+      onNotice(`Raw material "${name}" added with ${lengthNum} meter.`)
     }
 
-    setSubmitting(false)
-    onNotice(`Raw material "${name}" added successfully.`)
-    onClose()
+    setSelectedName('')
+    setLengthMeters('')
     onRefresh()
   }
 
@@ -2783,7 +3075,7 @@ function AddRawMaterialForm({
             void handleSubmit(e)
           }}
         >
-          <div className="form-grid form-grid-3">
+          <div className="form-grid">
             <label>
               Select Product Name
               <SearchableSelect
@@ -2799,21 +3091,9 @@ function AddRawMaterialForm({
                 type="number"
                 min="1"
                 step="1"
-                value={lengthInches}
-                onChange={(e) => setLengthInches(e.target.value)}
-                placeholder="e.g. 100"
-                required={!selectedExisting}
-                disabled={!!selectedExisting}
-              />
-            </label>
-            <label>
-              {selectedExisting ? 'Quantity to add' : 'Opening quantity'}
-              <input
-                type="number"
-                min={selectedExisting ? '1' : '0'}
-                step="1"
-                value={openingQty}
-                onChange={(e) => setOpeningQty(e.target.value)}
+                value={lengthMeters}
+                onChange={(e) => setLengthMeters(e.target.value)}
+                placeholder="e.g. 55"
                 required
               />
             </label>
@@ -2823,13 +3103,7 @@ function AddRawMaterialForm({
             type="submit"
             disabled={submitting || !selectedName}
           >
-            {submitting
-              ? selectedExisting
-                ? 'Adding…'
-                : 'Saving…'
-              : selectedExisting
-                ? 'Add Stock'
-                : 'Add Raw Material'}
+            {submitting ? 'Saving…' : 'Add Raw Material'}
           </button>
         </form>
       </div>
@@ -3045,7 +3319,9 @@ function RawMaterialDetail({
                 <td data-label="Product Name">
                   <b>{rm.productName}</b>
                 </td>
-                <td data-label="Length (Meter)">{lengthLabel(rm.lengthInches)}</td>
+                <td data-label="Length (Meter)">
+                  <b>{lengthLabel(String(rm.quantity))}</b>
+                </td>
                 <td data-label="Updated Date">{rm.updatedAt}</td>
                 <td data-label="Updated By">{rm.updatedBy}</td>
                 <td data-label="Stock In / Out">
@@ -3127,451 +3403,96 @@ const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
 function Products({
   products,
-  allProducts,
   search,
   setSearch,
-  identityName,
-  onRefresh,
-  onNotice: _onNotice,
+  onOpenBulkModal,
+  onExport,
 }: {
   products: Product[]
-  allProducts: Product[]
   search: string
   setSearch: (v: string) => void
-  identityName: string
-  onRefresh: () => void
-  onNotice: (msg: string) => void
+  onOpenBulkModal: () => void
+  onExport: () => void
 }) {
-  // ── Bulk-upload state ────────────────────────────────────────────────────────
-  const [bulkOpen, setBulkOpen] = useState(false)
-  const [bulkValidating, setBulkValidating] = useState(false)
-  const [bulkErrors, setBulkErrors] = useState<string[]>([])
-  const [bulkRows, setBulkRows] = useState<BulkRow[] | null>(null)
-  const [bulkSubmitting, setBulkSubmitting] = useState(false)
-  const [bulkModalError, setBulkModalError] = useState('')
-  const [bulkSuccess, setBulkSuccess] = useState<BulkSuccess | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-
-  const resetBulkModal = () => {
-    setBulkErrors([])
-    setBulkRows(null)
-    setBulkModalError('')
-    setBulkValidating(false)
-    if (fileInputRef.current) fileInputRef.current.value = ''
-  }
-
-  const openBulkModal = () => {
-    resetBulkModal()
-    setBulkOpen(true)
-  }
-
-  const closeBulkModal = () => {
-    setBulkOpen(false)
-    resetBulkModal()
-  }
-
-  // ── Download sample template ─────────────────────────────────────────────────
-  const downloadTemplate = () => {
-    const example =
-      allProducts.length > 0
-        ? [allProducts[0].name, allProducts[0].size, allProducts[0].category, 10, 'A-01']
-        : ['Sand', '84', 'Blackout', 10, 'A-01']
-
-    const ws = XLSX.utils.aoa_to_sheet([
-      ['Product Name', 'Size', 'Type', 'Quantity', 'Rack No'],
-      example,
-    ])
-    ws['!cols'] = [
-      { wch: 28 },
-      { wch: 10 },
-      { wch: 18 },
-      { wch: 12 },
-      { wch: 12 },
-    ]
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Stock Update')
-    XLSX.writeFile(wb, 'parda-bulk-stock-template.xlsx')
-  }
-
-  // ── Parse + validate uploaded file ──────────────────────────────────────────
-  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    // Client-side hardening: extension check
-    const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-    if (ext !== 'xlsx' && ext !== 'xls') {
-      setBulkErrors(['Only .xlsx or .xls files are accepted.'])
-      setBulkRows(null)
-      return
-    }
-    // Client-side hardening: size check
-    if (file.size > MAX_UPLOAD_BYTES) {
-      setBulkErrors([`File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum allowed size is 5 MB.`])
-      setBulkRows(null)
-      return
-    }
-
-    setBulkValidating(true)
-    setBulkErrors([])
-    setBulkRows(null)
-    setBulkModalError('')
-
-    const reader = new FileReader()
-    reader.onload = (evt) => {
-      try {
-        const arrayBuffer = evt.target?.result as ArrayBuffer
-        // Do NOT pass cellFormula:true — formulas are not evaluated
-        const wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' })
-        const sheetName = wb.SheetNames[0]
-        if (!sheetName) {
-          setBulkErrors(['The uploaded file contains no sheets.'])
-          setBulkValidating(false)
-          return
-        }
-        const ws = wb.Sheets[sheetName]
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const raw: Record<string, any>[] = XLSX.utils.sheet_to_json(ws, { defval: '' })
-
-        const errors: string[] = []
-        const validRows: BulkRow[] = []
-
-        for (let i = 0; i < raw.length; i++) {
-          const row = raw[i]
-          // Row numbers: spreadsheet row 2 = first data row (row 1 = header)
-          const spreadsheetRow = i + 2
-
-          const name = String(row['Product Name'] ?? '').trim()
-          const size = String(row['Size'] ?? '').trim()
-          const type = String(row['Type'] ?? '').trim()
-          const quantityRaw = row['Quantity']
-          const rackNo = String(row['Rack No'] ?? '').trim()
-
-          // a) Product match
-          const matched = allProducts.find(
-            (p) =>
-              p.name === name &&
-              String(p.size).trim() === size &&
-              p.category === type,
-          )
-          if (!matched) {
-            errors.push(
-              `Row ${spreadsheetRow}: Product not found — "${name} / ${size} / ${type}"`,
-            )
-          }
-
-          // b) Quantity must be positive integer
-          const qty = Number(quantityRaw)
-          if (!Number.isInteger(qty) || qty <= 0) {
-            errors.push(`Row ${spreadsheetRow}: Invalid quantity (must be a positive whole number).`)
-          }
-
-          // c) Rack No required
-          if (!rackNo) {
-            errors.push(`Row ${spreadsheetRow}: Rack No is required.`)
-          }
-
-          if (matched && Number.isInteger(qty) && qty > 0 && rackNo) {
-            validRows.push({
-              productId: matched.id,
-              productName: matched.name,
-              size: matched.size,
-              category: matched.category,
-              quantity: qty,
-              rackNumber: rackNo,
-            })
-          }
-        }
-
-        if (raw.length === 0) {
-          errors.push('The spreadsheet has no data rows (only a header row or is empty).')
-        }
-
-        setBulkErrors(errors)
-        setBulkRows(errors.length === 0 ? validRows : null)
-      } catch {
-        setBulkErrors(['Failed to parse the file. Make sure it is a valid .xlsx/.xls file.'])
-        setBulkRows(null)
-      } finally {
-        setBulkValidating(false)
-      }
-    }
-    reader.onerror = () => {
-      setBulkErrors(['Could not read the file.'])
-      setBulkValidating(false)
-    }
-    reader.readAsArrayBuffer(file)
-  }
-
-  // ── Confirm bulk insert ──────────────────────────────────────────────────────
-  const handleBulkConfirm = async () => {
-    if (!bulkRows || bulkRows.length === 0) return
-    if (!supabase) {
-      setBulkModalError('Supabase client not initialised — check environment variables.')
-      return
-    }
-
-    setBulkSubmitting(true)
-    setBulkModalError('')
-
-    const insertPayload = bulkRows.map((r) => ({
-      product_id: r.productId,
-      rack_number: r.rackNumber,
-      movement_type: 'stock_in' as const,
-      quantity: r.quantity,
-      updated_by: identityName,
-    }))
-
-    const { error } = await supabase.from('stock_transactions').insert(insertPayload)
-    setBulkSubmitting(false)
-
-    if (error) {
-      setBulkModalError(error.message)
-      return
-    }
-
-    // Build success summary
-    const successItems = bulkRows.map(
-      (r) => `${r.productName} · ${sizeLabel(r.size)} · ${r.category} — +${r.quantity} to rack ${r.rackNumber}`,
-    )
-    setBulkSuccess({ count: bulkRows.length, items: successItems })
-    closeBulkModal()
-    onRefresh()
-  }
-
-  // ── Export data ──────────────────────────────────────────────────────────────
-  const handleExport = () => {
-    const exportProducts = allProducts
-
-    // Compute column widths based on content
-    const colWidths = [
-      Math.max(14, ...exportProducts.map((p) => p.name.length)) + 2,
-      8,
-      Math.max(6, ...exportProducts.map((p) => p.category.length)) + 2,
-      10,
-      Math.max(8, ...exportProducts.map((p) =>
-        p.racks.length === 0 ? 1 : p.racks.map((r) => `${r.rackNumber} · ${r.quantity}`).join(', ').length,
-      )) + 2,
-    ]
-
-    const headerRow = ['Product Name', 'Size', 'Type', 'Quantity', 'Rack No.']
-    const dataRows = exportProducts.map((p) => [
-      p.name,
-      p.size,
-      p.category,
-      p.quantity,
-      p.racks.length === 0
-        ? '—'
-        : p.racks.map((r) => `${r.rackNumber} · ${r.quantity}`).join(', '),
-    ])
-
-    const ws = XLSX.utils.aoa_to_sheet([headerRow, ...dataRows])
-    ws['!cols'] = colWidths.map((wch) => ({ wch }))
-
-    // Autofilter on the full data range (supported in SheetJS community edition)
-    if (ws['!ref']) {
-      ws['!autofilter'] = { ref: ws['!ref'] }
-    }
-
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Inventory')
-
-    const today = new Date().toISOString().slice(0, 10)
-    XLSX.writeFile(wb, `parda-inventory-export-${today}.xlsx`)
-  }
-
   return (
-    <>
-      {/* Persistent bulk-update success card */}
-      {bulkSuccess && (
-        <div className="bulk-success-card" role="status">
-          <div className="bulk-success-header">
-            <b>Bulk stock update complete — {bulkSuccess.count} {bulkSuccess.count === 1 ? 'item' : 'items'} updated</b>
-            <button
-              className="bulk-success-close"
-              onClick={() => setBulkSuccess(null)}
-              aria-label="Dismiss success message"
-            >
-              ×
-            </button>
-          </div>
-          <ul className="bulk-success-list">
-            {bulkSuccess.items.map((item, i) => (
-              <li key={i}>{item}</li>
-            ))}
-          </ul>
+    <section className="panel products-panel">
+      <div className="table-tools">
+        <label className="search">
+          ⌕{' '}
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search name, size or category"
+          />
+        </label>
+        <div className="products-toolbar-actions">
+          <button className="button secondary" type="button" onClick={onOpenBulkModal}>
+            Update Stock
+          </button>
+          <button className="button secondary" type="button" onClick={onExport}>
+            Export Data
+          </button>
+          <span>{products.length} products</span>
         </div>
-      )}
-
-      <section className="panel products-panel">
-        <div className="table-tools">
-          <label className="search">
-            ⌕{' '}
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search name, size or category"
-            />
-          </label>
-          <div className="products-toolbar-actions">
-            <button className="button secondary" type="button" onClick={openBulkModal}>
-              Update Stock
-            </button>
-            <button className="button secondary" type="button" onClick={handleExport}>
-              Export Data
-            </button>
-            <span>{products.length} products</span>
-          </div>
-        </div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Product name</th>
-                <th>Size</th>
-                <th>Type</th>
-                <th>Quantity</th>
-                <th>Racks</th>
-                <th>Last updated</th>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Product name</th>
+              <th>Size</th>
+              <th>Type</th>
+              <th>Quantity</th>
+              <th>Racks</th>
+              <th>Last updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            {products.map((p) => (
+              <tr key={p.id}>
+                <td data-label="Product name">
+                  <b>{p.name}</b>
+                </td>
+                <td data-label="Size">{sizeLabel(p.size)}</td>
+                <td data-label="Type">{p.category}</td>
+                <td data-label="Quantity">
+                  <span className="stock-count">{p.quantity}</span>
+                </td>
+                <td data-label="Racks">
+                  {p.racks.length === 0 ? (
+                    <span className="no-racks">—</span>
+                  ) : (
+                    <span className="rack-list">
+                      {p.racks
+                        .map((r) => `${r.rackNumber} · ${r.quantity}`)
+                        .join(', ')}
+                    </span>
+                  )}
+                </td>
+                <td data-label="Last updated">
+                  {p.updatedAt}
+                  <span>by {p.updatedBy}</span>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {products.map((p) => (
-                <tr key={p.id}>
-                  <td data-label="Product name">
-                    <b>{p.name}</b>
-                  </td>
-                  <td data-label="Size">{sizeLabel(p.size)}</td>
-                  <td data-label="Type">{p.category}</td>
-                  <td data-label="Quantity">
-                    <span className="stock-count">{p.quantity}</span>
-                  </td>
-                  <td data-label="Racks">
-                    {p.racks.length === 0 ? (
-                      <span className="no-racks">—</span>
-                    ) : (
-                      <span className="rack-list">
-                        {p.racks
-                          .map((r) => `${r.rackNumber} · ${r.quantity}`)
-                          .join(', ')}
-                      </span>
-                    )}
-                  </td>
-                  <td data-label="Last updated">
-                    {p.updatedAt}
-                    <span>by {p.updatedBy}</span>
-                  </td>
-                </tr>
-              ))}
-              {products.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={6}
-                    style={{
-                      textAlign: 'center',
-                      color: 'var(--muted)',
-                      padding: '28px',
-                    }}
-                  >
-                    No products found.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      {/* Bulk Stock Update modal */}
-      {bulkOpen && (
-        <Modal title="Bulk Stock Update" onClose={closeBulkModal}>
-          <div className="bulk-modal-body">
-            <p className="bulk-modal-intro">
-              Download the template, fill in your stock data, then upload the completed file to update stock in one go. All rows are inserted as a single database transaction.
-            </p>
-
-            <div className="bulk-modal-section">
-              <b className="bulk-section-label">Step 1 — Download the template</b>
-              <button
-                className="button secondary"
-                type="button"
-                onClick={downloadTemplate}
-              >
-                Download Sample Template
-              </button>
-            </div>
-
-            <div className="bulk-modal-section">
-              <b className="bulk-section-label">Step 2 — Upload your filled file</b>
-              <label className="bulk-file-label">
-                <span>Choose .xlsx or .xls file (max 5 MB)</span>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".xlsx,.xls"
-                  onChange={handleFileChange}
-                  className="bulk-file-input"
-                  disabled={bulkSubmitting}
-                />
-              </label>
-            </div>
-
-            {bulkValidating && (
-              <p className="bulk-validating">Validating…</p>
+            ))}
+            {products.length === 0 && (
+              <tr>
+                <td
+                  colSpan={6}
+                  style={{
+                    textAlign: 'center',
+                    color: 'var(--muted)',
+                    padding: '28px',
+                  }}
+                >
+                  No products found.
+                </td>
+              </tr>
             )}
-
-            {bulkErrors.length > 0 && (
-              <div className="bulk-errors" role="alert">
-                <b>Fix the following errors before uploading again:</b>
-                <ul className="bulk-error-list">
-                  {bulkErrors.map((err, i) => (
-                    <li key={i}>{err}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {bulkRows && bulkErrors.length === 0 && (
-              <div className="bulk-preview" role="status">
-                <b>{bulkRows.length} {bulkRows.length === 1 ? 'row' : 'rows'} validated successfully.</b>
-                <ul className="bulk-preview-list">
-                  {bulkRows.map((r, i) => (
-                    <li key={i}>
-                      {r.productName} · {sizeLabel(r.size)} · {r.category} — +{r.quantity} to rack {r.rackNumber}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {bulkModalError && (
-              <div className="fetch-error" role="alert" style={{ marginTop: '10px' }}>
-                <b>Error:</b> {bulkModalError}
-              </div>
-            )}
-
-            <div className="bulk-modal-actions">
-              <button
-                className="button secondary"
-                type="button"
-                onClick={closeBulkModal}
-                disabled={bulkSubmitting}
-              >
-                Cancel
-              </button>
-              <button
-                className="button primary"
-                type="button"
-                onClick={() => { void handleBulkConfirm() }}
-                disabled={!bulkRows || bulkRows.length === 0 || bulkSubmitting || bulkValidating}
-              >
-                {bulkSubmitting ? 'Updating…' : 'Confirm'}
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
-    </>
+          </tbody>
+        </table>
+      </div>
+    </section>
   )
 }
 
