@@ -113,15 +113,15 @@ const fmtDate = (iso: string) =>
   }).format(new Date(iso))
 
 /**
- * Format a size value for display, appending " inch" as the inches suffix.
- * Guards against double-appending if the value already ends with "in" or "inch".
+ * Format a size value for display, appending " feet" as the unit suffix.
+ * Guards against double-appending if the value already ends with "ft"/"foot"/"feet".
  * Returns "—" for empty/blank values.
  */
 const sizeLabel = (size: string): string => {
   if (!size || !size.trim()) return '—'
   const trimmed = size.trim()
-  if (/\bin(ch(es?)?)?\s*$/i.test(trimmed)) return trimmed
-  return `${trimmed} inch`
+  if (/\b(ft|feet|foot)\s*$/i.test(trimmed)) return trimmed
+  return `${trimmed} feet`
 }
 
 /**
@@ -139,6 +139,54 @@ const lengthLabel = (length: string): string => {
 /** Display identity for a product: "name · size (in) · category" */
 const productLabel = (name: string, size: string, category: string) =>
   `${name} · ${sizeLabel(size)} · ${category}`
+
+// ── Product catalog (from PRODUCT, SIZE AND TYPE.xlsx) ────────────────────────
+// Any Name × Size × Type combination is valid, whether or not a product row
+// exists for it yet — used to seed dropdowns across Stock In and Returned
+// Stock so picking a not-yet-created combination can create it on submit.
+
+const PRODUCT_NAME_CATALOG = [
+  'BEIGE', 'PINK', 'LIGHT GREY', 'DARK GREY', 'TAUPE BROWN', 'DARK BROWN',
+  'NAVY BLUE', 'SPA BLUE', 'MAROON', 'BLACK', 'WHITE', 'GREEN', 'YELLOW',
+  'PURPLE', 'TEAL', 'BLUE FLOWER', 'GREEN FLOWER', 'GREY FLOWER',
+  'PINK FLOWER', 'BROWN FLOWER', 'PURPLE FLOWER', 'BEIGE FLOWER',
+  'YELLOW BIRD', 'GREEN BIRD', 'SPA BLUE BIRD', 'GREY BIRD', 'UNICORN PINK',
+  'UNICORN LILAC', 'DINO BLUE', 'RAINBOW', 'BLUE JUNGLE', 'CREAM JUNGLE',
+  'BLUE/RED TREE', 'CATTELEYA YELLOW', 'CATTELEYA BLUE', 'CAMELLIA BLACK',
+  'CAMELLIA TAUPE', 'ORANGE YELLOW', 'LAVENDER PURPLE', 'BORDER FLOWER',
+  'GOLDEN MARBLE', 'BLUE MARBLE', 'GREEN MARBLE', 'WHITE ABSTRACT',
+  'BLACK ABSTRACT', 'FLOWING PETAL', 'LINEAR HARMONY', 'FOREST FLOW',
+  'LEAF PATTERN', 'FACE LINE', 'BOLD FACE', 'ZIGZAG VIBE', 'ENERGETIC FLOW',
+  'LEAF DANCE', 'ABSTRACT CIRCLE', 'GEOMETRIC FLOW', 'WILD PATTERN',
+  'DYNAMIC COLORS', 'NEON FACE', 'PINK BLOSSOM', 'SKY GARDEN',
+  'CLASSIC PISTA', 'SLATE CTREAM', 'BLUSH LEAF', 'WHITE LINEN', 'CREAM LINEN',
+  'BROWN LINEN', 'BEIGE LINEN', 'DARK GREY LINEN', 'LIGHT GREY LINEN',
+  'AMBER WAVE 5', 'AMBER WAVE 6', 'AMBER WAVE 7', 'AMBER WAVE 8',
+  'AMBER WAVE 9', 'AMBER WAVE 10', 'GOLDEN WAVE 5', 'GOLDEN WAVE 6',
+  'GOLDEN WAVE 7', 'GOLDEN WAVE 8', 'GOLDEN WAVE 9', 'GOLDEN WAVE 10',
+  'AUTUM BLOOM 5', 'AUTUM BLOOM 6', 'AUTUM BLOOM 7', 'AUTUM BLOOM 8',
+  'AUTUM BLOOM 9', 'AUTUM BLOOM 10', 'BOHO SCARLET 5', 'BOHO SCARLET 6',
+  'BOHO SCARLET 7', 'BOHO SCARLET 8', 'BOHO SCARLET 9', 'BOHO SCARLET 10',
+  'BLUE STAR',
+]
+
+const PRODUCT_SIZE_CATALOG = ['5', '6', '7', '8', '9', '10', '11', '12']
+
+const PRODUCT_TYPE_CATALOG = [
+  'BR', 'WR', 'SR', 'S ROD', 'B ROD', 'W ROD', 'SHEER', 'SHEER RING', 'SHEER ROD',
+]
+
+// 40 numbered bays × 6 rows (A, B, C, D, E, T) — e.g. "1-A" … "40-T".
+const RACK_CATALOG = Array.from({ length: 40 }, (_, i) => i + 1).flatMap((n) =>
+  ['A', 'B', 'C', 'D', 'E', 'T'].map((row) => `${n}-${row}`),
+)
+
+/** Static catalog values first, then any already-in-use values not covered by it. */
+function mergeWithCatalog(catalog: string[], inUse: string[]): string[] {
+  const seen = new Set(catalog)
+  const extras = inUse.filter((v) => v && !seen.has(v))
+  return [...catalog, ...new Set(extras)]
+}
 
 const STAFF_NAME_KEY = 'parda_staff_name'
 
@@ -2441,48 +2489,35 @@ function StockInForm({
   const [newRackInput, setNewRackInput] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  // Distinct names
+  // The full product-name catalog, plus any real product name outside it.
   const nameOptions = useMemo<SearchableSelectOption[]>(() => {
-    const seen = new Set<string>()
-    const opts: SearchableSelectOption[] = []
-    for (const p of products) {
-      if (!seen.has(p.name)) {
-        seen.add(p.name)
-        opts.push({ value: p.name, label: p.name })
-      }
-    }
-    return opts
+    const inUse = products.map((p) => p.name)
+    return mergeWithCatalog(PRODUCT_NAME_CATALOG, inUse).map((n) => ({
+      value: n,
+      label: n,
+    }))
   }, [products])
 
-  // Sizes for selected name (label shows inches suffix, value stays raw)
+  // The full size catalog, plus any real product size outside it — sizes are
+  // independent of the selected name so a brand-new combination can be picked.
   const sizeOptions = useMemo<SearchableSelectOption[]>(() => {
-    if (!selectedName) return []
-    const seen = new Set<string>()
-    const opts: SearchableSelectOption[] = []
-    for (const p of products) {
-      if (p.name === selectedName && !seen.has(p.size)) {
-        seen.add(p.size)
-        opts.push({ value: p.size, label: sizeLabel(p.size) })
-      }
-    }
-    return opts
-  }, [products, selectedName])
+    const inUse = products.map((p) => p.size)
+    return mergeWithCatalog(PRODUCT_SIZE_CATALOG, inUse).map((s) => ({
+      value: s,
+      label: sizeLabel(s),
+    }))
+  }, [products])
 
-  // Categories for selected name+size
+  // The full type catalog, plus any real product category outside it.
   const categoryOptions = useMemo<SearchableSelectOption[]>(() => {
-    if (!selectedName || !selectedSize) return []
-    const seen = new Set<string>()
-    const opts: SearchableSelectOption[] = []
-    for (const p of products) {
-      if (p.name === selectedName && p.size === selectedSize && !seen.has(p.category)) {
-        seen.add(p.category)
-        opts.push({ value: p.category, label: p.category })
-      }
-    }
-    return opts
-  }, [products, selectedName, selectedSize])
+    const inUse = products.map((p) => p.category)
+    return mergeWithCatalog(PRODUCT_TYPE_CATALOG, inUse).map((c) => ({
+      value: c,
+      label: c,
+    }))
+  }, [products])
 
-  // Resolved product (unique by name+size+category)
+  // Resolved product (unique by name+size+category) — may not exist yet.
   const resolvedProduct = useMemo(
     () =>
       selectedName && selectedSize && selectedCategory
@@ -2496,19 +2531,29 @@ function StockInForm({
     [products, selectedName, selectedSize, selectedCategory],
   )
 
-  // Rack options for the searchable dropdown (existing racks + add-new sentinel)
-  const rackOptions = useMemo<SearchableSelectOption[]>(() => {
-    const opts: SearchableSelectOption[] = (resolvedProduct?.racks ?? []).map(
-      (r) => ({
-        value: r.rackNumber,
-        label: `${r.rackNumber} (${r.quantity} in stock)`,
-      }),
-    )
-    opts.push({ value: '__new__', label: '+ Add new rack' })
-    return opts
-  }, [resolvedProduct])
+  // The full rack catalog, plus any real rack number outside it — used
+  // whenever the resolved product has no racks of its own yet (or hasn't
+  // resolved at all), so the field is never disabled.
+  const allRackNumbers = useMemo<string[]>(() => {
+    const inUse = products.flatMap((p) => p.racks.map((r) => r.rackNumber))
+    return mergeWithCatalog(RACK_CATALOG, inUse)
+  }, [products])
 
   const racks = resolvedProduct?.racks ?? []
+
+  // Once the product resolves, list its own racks; otherwise fall back to
+  // the full rack catalog so the field is never disabled while Name/Size/
+  // Type are still being picked.
+  const knownRackNumbers = resolvedProduct
+    ? racks.map((r) => ({
+        value: r.rackNumber,
+        label: `${r.rackNumber} (${r.quantity} in stock)`,
+      }))
+    : allRackNumbers.map((rn) => ({ value: rn, label: rn }))
+  const rackOptions: SearchableSelectOption[] = [
+    ...knownRackNumbers,
+    { value: '__new__', label: '+ Add new rack' },
+  ]
 
   const handleNameChange = (name: string) => {
     setSelectedName(name)
@@ -2546,17 +2591,8 @@ function StockInForm({
     }
   }
 
-  // When product resolves and it has zero racks, auto-switch to new-rack mode
-  useEffect(() => {
-    if (resolvedProduct && racks.length === 0) {
-      setUseNewRack(true)
-      setSelectedRackNumber('')
-    } else if (resolvedProduct && racks.length > 0) {
-      setUseNewRack(false)
-    }
-  }, [resolvedProduct, racks.length])
-
-  const effectiveRack = useNewRack ? newRackInput.trim() : selectedRackNumber
+  const showNewRackInput = useNewRack || knownRackNumbers.length === 0
+  const effectiveRack = showNewRackInput ? newRackInput.trim() : selectedRackNumber
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -2565,8 +2601,8 @@ function StockInForm({
     const data = new FormData(e.currentTarget)
     const quantity = Number(data.get('quantity'))
 
-    if (!resolvedProduct) {
-      onNotice('Select a product (Name, Size and Type).')
+    if (!selectedName || !selectedSize || !selectedCategory) {
+      onNotice('Select a product name, size, and type.')
       return
     }
     if (!effectiveRack) {
@@ -2579,8 +2615,32 @@ function StockInForm({
     }
 
     setSubmitting(true)
+
+    // If this Name+Size+Type combo doesn't exist yet, create it first — same
+    // "add on the fly" behavior as Update Returned Stock.
+    let productId = resolvedProduct?.id ?? null
+    if (!productId) {
+      const { data: created, error: createError } = await supabase
+        .from('products')
+        .insert({
+          name: selectedName,
+          size: selectedSize,
+          category: selectedCategory,
+          updated_by: identityName,
+        })
+        .select('id')
+        .single()
+
+      if (createError || !created) {
+        setSubmitting(false)
+        onNotice(createError?.message ?? 'Failed to create product.')
+        return
+      }
+      productId = created.id as string
+    }
+
     const { error } = await supabase.from('stock_transactions').insert({
-      product_id: resolvedProduct.id,
+      product_id: productId,
       rack_number: effectiveRack,
       movement_type: 'stock_in',
       quantity,
@@ -2626,21 +2686,19 @@ function StockInForm({
             <label>
               Select Size
               <SearchableSelect
-                placeholder={selectedName ? 'Type to search…' : 'Choose name first'}
+                placeholder="Type to search…"
                 options={sizeOptions}
                 value={selectedSize}
                 onChange={handleSizeChange}
-                disabled={!selectedName}
               />
             </label>
             <label>
               Select Type
               <SearchableSelect
-                placeholder={selectedSize ? 'Type to search…' : 'Choose size first'}
+                placeholder="Type to search…"
                 options={categoryOptions}
                 value={selectedCategory}
                 onChange={handleCategoryChange}
-                disabled={!selectedSize}
               />
             </label>
           </div>
@@ -2648,52 +2706,34 @@ function StockInForm({
           <div className="form-grid">
             <label>
               Rack No.
-              {resolvedProduct ? (
-                <>
-                  {racks.length > 0 && !useNewRack ? (
-                    <SearchableSelect
-                      placeholder="Select a rack…"
-                      options={rackOptions}
-                      value={selectedRackNumber || ''}
-                      onChange={handleRackChange}
-                    />
-                  ) : useNewRack ? (
-                    <div className="new-rack-wrap">
-                      <input
-                        className="new-rack-input"
-                        placeholder="e.g. A-01"
-                        value={newRackInput}
-                        onChange={(e) => setNewRackInput(e.target.value)}
-                        autoFocus={racks.length > 0}
-                      />
-                      {racks.length > 0 && (
-                        <button
-                          type="button"
-                          className="rack-cancel-new"
-                          onClick={() => {
-                            setUseNewRack(false)
-                            setSelectedRackNumber('')
-                          }}
-                        >
-                          Cancel — pick existing
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    /* zero racks — auto new rack mode */
-                    <input
-                      className="new-rack-input"
-                      placeholder="e.g. A-01 (first rack for this product)"
-                      value={newRackInput}
-                      onChange={(e) => setNewRackInput(e.target.value)}
-                    />
+              {showNewRackInput ? (
+                <div className="new-rack-wrap">
+                  <input
+                    className="new-rack-input"
+                    placeholder="e.g. A-01"
+                    value={newRackInput}
+                    onChange={(e) => setNewRackInput(e.target.value)}
+                    autoFocus={knownRackNumbers.length > 0}
+                  />
+                  {knownRackNumbers.length > 0 && (
+                    <button
+                      type="button"
+                      className="rack-cancel-new"
+                      onClick={() => {
+                        setUseNewRack(false)
+                        setSelectedRackNumber('')
+                      }}
+                    >
+                      Cancel — pick existing
+                    </button>
                   )}
-                </>
+                </div>
               ) : (
-                <input
-                  disabled
-                  placeholder="Resolve product first"
-                  className="all-products-qty-readonly"
+                <SearchableSelect
+                  placeholder="Select a rack…"
+                  options={rackOptions}
+                  value={selectedRackNumber}
+                  onChange={handleRackChange}
                 />
               )}
             </label>
@@ -2706,7 +2746,7 @@ function StockInForm({
           <button
             className="button primary"
             type="submit"
-            disabled={submitting || !resolvedProduct}
+            disabled={submitting || !selectedName || !selectedSize || !selectedCategory}
           >
             {submitting ? 'Saving…' : 'Record Stock In'}
           </button>
@@ -3406,8 +3446,6 @@ function RawMaterialDetail({
 
 // ── Returned Stock page ───────────────────────────────────────────────────────
 
-const RETURNED_STOCK_SIZES = ['2', '3', '4', '5', '6', '7', '8', '9', '10']
-
 type ReturnedStockRow = {
   id: number
   name: string
@@ -3450,46 +3488,38 @@ function ReturnedStockPage({
   const [errors, setErrors] = useState<string[]>([])
   const [submitting, setSubmitting] = useState(false)
 
-  // All distinct product names.
+  // The full product-name catalog, plus any real product name outside it.
   const nameOptions = useMemo<SearchableSelectOption[]>(() => {
-    const seen = new Set<string>()
-    const opts: SearchableSelectOption[] = []
-    for (const p of products) {
-      if (!seen.has(p.name)) {
-        seen.add(p.name)
-        opts.push({ value: p.name, label: p.name })
-      }
-    }
-    return opts
+    const inUse = products.map((p) => p.name)
+    return mergeWithCatalog(PRODUCT_NAME_CATALOG, inUse).map((n) => ({
+      value: n,
+      label: n,
+    }))
   }, [products])
 
-  // Fixed size range 2–10, independent of the selected product.
-  const sizeOptions = useMemo<SearchableSelectOption[]>(
-    () => RETURNED_STOCK_SIZES.map((s) => ({ value: s, label: sizeLabel(s) })),
-    [],
-  )
+  // The full size catalog (5–12 feet), plus any real product size outside it.
+  const sizeOptions = useMemo<SearchableSelectOption[]>(() => {
+    const inUse = products.map((p) => p.size)
+    return mergeWithCatalog(PRODUCT_SIZE_CATALOG, inUse).map((s) => ({
+      value: s,
+      label: sizeLabel(s),
+    }))
+  }, [products])
 
-  // All distinct categories already in use, independent of name/size.
+  // The full type catalog, plus any real product category outside it.
   const categoryOptions = useMemo<SearchableSelectOption[]>(() => {
-    const seen = new Set<string>()
-    const opts: SearchableSelectOption[] = []
-    for (const p of products) {
-      if (!seen.has(p.category)) {
-        seen.add(p.category)
-        opts.push({ value: p.category, label: p.category })
-      }
-    }
-    return opts
+    const inUse = products.map((p) => p.category)
+    return mergeWithCatalog(PRODUCT_TYPE_CATALOG, inUse).map((c) => ({
+      value: c,
+      label: c,
+    }))
   }, [products])
 
-  // All distinct rack numbers across every product — used as the Rack No.
-  // dropdown's fallback list before a specific product has been resolved.
+  // The full 40×6 rack catalog, plus any real rack number outside it — used
+  // as the Rack No. dropdown's fallback list before a product has resolved.
   const allRackNumbers = useMemo<string[]>(() => {
-    const seen = new Set<string>()
-    for (const p of products) {
-      for (const r of p.racks) seen.add(r.rackNumber)
-    }
-    return [...seen].sort()
+    const inUse = products.flatMap((p) => p.racks.map((r) => r.rackNumber))
+    return mergeWithCatalog(RACK_CATALOG, inUse)
   }, [products])
 
   const updateRow = (id: number, patch: Partial<ReturnedStockRow>) => {
@@ -3580,8 +3610,8 @@ function ReturnedStockPage({
       const matched = products.find(
         (p) => p.name === row.name && p.size === row.size && p.category === row.category,
       )
-      const knownRacks = matched ? matched.racks : []
-      const showNewRackInput = row.useNewRack || knownRacks.length === 0
+      const knownRackCount = matched ? matched.racks.length : allRackNumbers.length
+      const showNewRackInput = row.useNewRack || knownRackCount === 0
       const effectiveRack = showNewRackInput ? row.newRackInput.trim() : row.rackNumber
 
       if (!effectiveRack) {
