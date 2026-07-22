@@ -2061,12 +2061,25 @@ function Dashboard({
     <>
       {/* Metric cards */}
       <section className="metrics">
-        {/* Info card: total products */}
-        <div className="metric">
+        {/* Action card: Ready Products — clicking it returns to the default
+            product listing, closing whatever form/table is active. */}
+        <div
+          className={`metric metric-clickable ${activeAction === null ? 'metric-active' : ''}`}
+          role="button"
+          tabIndex={0}
+          onClick={() => setActiveAction(null)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              setActiveAction(null)
+            }
+          }}
+          aria-pressed={activeAction === null}
+          aria-label="Ready Products. Click to view the product listing."
+        >
           <div className="metric-icon">▣</div>
           <div>
-            <span>Total products</span>
-            <strong>{products.length}</strong>
+                       <strong className="metric-action-label"Ready Products</strong>
           </div>
         </div>
 
