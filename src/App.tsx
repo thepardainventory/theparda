@@ -2079,7 +2079,7 @@ function Dashboard({
         >
           <div className="metric-icon">▣</div>
           <div>
-                       <strong className="metric-action-label"Ready Products</strong>
+            <strong className="metric-action-label">Ready Products</strong>
           </div>
         </div>
 
