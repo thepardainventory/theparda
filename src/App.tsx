@@ -1089,12 +1089,6 @@ function App() {
             onClick={() => setPage('products')}
           />
           <Nav
-            active={page === 'history'}
-            icon="◷"
-            label="Update history"
-            onClick={() => setPage('history')}
-          />
-          <Nav
             active={page === 'raw-materials'}
             icon="◈"
             label="Raw Material Detail"
@@ -1130,6 +1124,12 @@ function App() {
               onClick={() => setPage('all-products')}
             />
           )}
+          <Nav
+            active={page === 'history'}
+            icon="◷"
+            label="Update history"
+            onClick={() => setPage('history')}
+          />
         </nav>
         <div className="sidebar-bottom">
           <div className="user-card">
@@ -3045,19 +3045,19 @@ function AddRawMaterialForm({
   const [lengthMeters, setLengthMeters] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  // All distinct product names — selecting one just adds meters to its
-  // raw material stock (creating the raw material record first if needed).
+  // The full product-name catalog, plus any real product/raw-material name
+  // outside it — selecting one just adds meters to its raw material stock
+  // (creating the raw material record first if needed).
   const nameOptions = useMemo<SearchableSelectOption[]>(() => {
-    const seen = new Set<string>()
-    const opts: SearchableSelectOption[] = []
-    for (const p of products) {
-      if (!seen.has(p.name)) {
-        seen.add(p.name)
-        opts.push({ value: p.name, label: p.name })
-      }
-    }
-    return opts
-  }, [products])
+    const inUse = [
+      ...products.map((p) => p.name),
+      ...rawMaterials.map((rm) => rm.productName),
+    ]
+    return mergeWithCatalog(PRODUCT_NAME_CATALOG, inUse).map((n) => ({
+      value: n,
+      label: n,
+    }))
+  }, [products, rawMaterials])
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -3265,8 +3265,6 @@ function RawMaterialAdjustCell({
 
 // ── RawMaterialDetail page ────────────────────────────────────────────────────
 
-const RAW_MATERIAL_PAGE_SIZE = 10
-
 type RawMaterialSortKey = 'productName' | 'updatedAt'
 type SortDir = 'asc' | 'desc'
 
@@ -3284,7 +3282,6 @@ function RawMaterialDetail({
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState<RawMaterialSortKey>('productName')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
-  const [currentPage, setCurrentPage] = useState(1)
 
   const handleSort = (key: RawMaterialSortKey) => {
     if (key === sortKey) {
@@ -3293,7 +3290,6 @@ function RawMaterialDetail({
       setSortKey(key)
       setSortDir('asc')
     }
-    setCurrentPage(1)
   }
 
   const filtered = useMemo(() => {
@@ -3316,17 +3312,6 @@ function RawMaterialDetail({
       return sortDir === 'asc' ? cmp : -cmp
     })
   }, [filtered, sortKey, sortDir])
-
-  // Reset to page 1 when search or sort changes
-  useEffect(() => {
-    setCurrentPage(1)
-  }, [search, sortKey, sortDir])
-
-  const totalPages = Math.max(1, Math.ceil(sorted.length / RAW_MATERIAL_PAGE_SIZE))
-  const paginated = sorted.slice(
-    (currentPage - 1) * RAW_MATERIAL_PAGE_SIZE,
-    currentPage * RAW_MATERIAL_PAGE_SIZE,
-  )
 
   const sortIndicator = (key: RawMaterialSortKey) => {
     if (sortKey !== key) return ' ↕'
@@ -3376,7 +3361,7 @@ function RawMaterialDetail({
             </tr>
           </thead>
           <tbody>
-            {paginated.map((rm) => (
+            {sorted.map((rm) => (
               <tr key={rm.id}>
                 <td data-label="Product Name">
                   <b>{rm.productName}</b>
@@ -3398,7 +3383,7 @@ function RawMaterialDetail({
                 </td>
               </tr>
             ))}
-            {paginated.length === 0 && (
+            {sorted.length === 0 && (
               <tr>
                 <td
                   colSpan={5}
@@ -3417,29 +3402,6 @@ function RawMaterialDetail({
           </tbody>
         </table>
       </div>
-      {totalPages > 1 && (
-        <div className="pagination">
-          <button
-            className="pagination-btn"
-            type="button"
-            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-            disabled={currentPage === 1}
-          >
-            ← Prev
-          </button>
-          <span className="pagination-info">
-            Page {currentPage} of {totalPages}
-          </span>
-          <button
-            className="pagination-btn"
-            type="button"
-            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-            disabled={currentPage === totalPages}
-          >
-            Next →
-          </button>
-        </div>
-      )}
     </section>
   )
 }
