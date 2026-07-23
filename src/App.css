@@ -113,6 +113,9 @@ main{padding:42px 48px 55px;max-width:1450px;width:100%;margin:auto}header{displ
 /* ── All Products edit page ────────────────────────────────────────── */
 .all-products-qty-readonly{background:#f5f7f5;color:var(--muted);cursor:not-allowed}
 .all-products-modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:4px}
+.text-button-danger{color:#bc3a24;margin-left:12px}
+.button.danger{background:#bc3a24;color:#fff}
+.button.danger:hover{background:#9c2f1c}
 /* ── Dashboard action metric cards ────────────────────────────────── */
 .metric-action{transition:box-shadow .15s,border-color .15s}
 .metric-action:hover{border-color:#a3bfb8;box-shadow:0 2px 8px #2544401a}

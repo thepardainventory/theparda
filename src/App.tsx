@@ -1339,6 +1339,8 @@ function AllProductsPage({
     category: '',
   })
   const [saving, setSaving] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const openEdit = (p: Product) => {
     setDraft({ name: p.name, size: p.size, category: p.category })
@@ -1348,6 +1350,36 @@ function AllProductsPage({
   const closeEdit = () => {
     setEditingId(null)
   }
+
+  const handleDelete = async () => {
+    if (!supabase || !deletingId) return
+    const target = products.find((p) => p.id === deletingId)
+
+    setDeleting(true)
+    const { error } = await supabase.from('products').delete().eq('id', deletingId)
+    setDeleting(false)
+
+    if (error) {
+      if (error.code === '23503') {
+        onNotice(
+          `Can't delete "${target ? productLabel(target.name, target.size, target.category) : 'this product'}" yet — the pending database migration that lets deletes clear stock history hasn't been applied.`,
+        )
+      } else {
+        onNotice(error.message)
+      }
+      return
+    }
+
+    onNotice(
+      `"${target ? productLabel(target.name, target.size, target.category) : 'Product'}" deleted successfully.`,
+    )
+    setDeletingId(null)
+    onRefresh()
+  }
+
+  const deletingProduct = deletingId
+    ? products.find((p) => p.id === deletingId) ?? null
+    : null
 
   const handleSave = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -1443,6 +1475,12 @@ function AllProductsPage({
                   >
                     Edit
                   </button>
+                  <button
+                    className="text-button text-button-danger"
+                    onClick={() => setDeletingId(p.id)}
+                  >
+                    Delete
+                  </button>
                 </td>
               </tr>
             ))}
@@ -1534,6 +1572,56 @@ function AllProductsPage({
               </button>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {deletingId && deletingProduct && (
+        <Modal title="Delete product" onClose={() => setDeletingId(null)}>
+          <p className="setup-copy">
+            Delete{' '}
+            <b>
+              {productLabel(
+                deletingProduct.name,
+                deletingProduct.size,
+                deletingProduct.category,
+              )}
+            </b>
+            ?{' '}
+            {deletingProduct.quantity > 0 ? (
+              <>
+                It currently has <b>{deletingProduct.quantity}</b> in stock.
+                Deleting it will permanently remove that stock and its entire
+                stock movement history.
+              </>
+            ) : (
+              'This will permanently remove it and any recorded stock movement history.'
+            )}{' '}
+            This cannot be undone.
+          </p>
+          <div className="all-products-modal-actions">
+            <button
+              type="button"
+              className="button secondary"
+              onClick={() => setDeletingId(null)}
+              disabled={deleting}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="button danger"
+              onClick={() => {
+                void handleDelete()
+              }}
+              disabled={deleting}
+            >
+              {deleting
+                ? 'Deleting…'
+                : deletingProduct.quantity > 0
+                  ? 'Delete and remove stock'
+                  : 'Delete product'}
+            </button>
+          </div>
         </Modal>
       )}
     </section>
