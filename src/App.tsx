@@ -54,6 +54,16 @@ type DbTransaction = {
   products: { name: string; size: string; category: string } | null
 }
 
+type DbRawMaterialTransaction = {
+  id: string
+  raw_material_id: string
+  movement_type: 'stock_in' | 'stock_out'
+  quantity: number
+  updated_by: string
+  created_at: string
+  raw_materials: { product_name: string } | null
+}
+
 type DbStaff = {
   id: string
   name: string
@@ -93,6 +103,8 @@ type StockUpdate = {
   quantity: number
   by: string
   date: string
+  createdAt: string
+  source: 'product' | 'raw_material'
 }
 
 type RawMaterial = {
@@ -258,6 +270,23 @@ function toStockUpdate(row: DbTransaction): StockUpdate {
     quantity: row.quantity,
     by: row.updated_by,
     date: fmtDate(row.created_at),
+    createdAt: row.created_at,
+    source: 'product',
+  }
+}
+
+function toRawMaterialStockUpdate(row: DbRawMaterialTransaction): StockUpdate {
+  const rm = row.raw_materials
+  return {
+    id: row.id,
+    product: rm ? rm.product_name : '(deleted)',
+    rack: '—',
+    type: row.movement_type === 'stock_in' ? 'Stock In' : 'Stock Out',
+    quantity: row.quantity,
+    by: row.updated_by,
+    date: fmtDate(row.created_at),
+    createdAt: row.created_at,
+    source: 'raw_material',
   }
 }
 
@@ -529,7 +558,7 @@ function App() {
     setLoading(true)
     setFetchError('')
 
-    const [prodRes, racksRes, txRes, staffRes, rawMatRes] = await Promise.all([
+    const [prodRes, racksRes, txRes, staffRes, rawMatRes, rawMatTxRes] = await Promise.all([
       supabase
         .from('products')
         .select('*')
@@ -544,6 +573,11 @@ function App() {
         .limit(200),
       supabase.from('staff').select('*').eq('active', true).order('name'),
       supabase.from('raw_materials').select('*').order('product_name'),
+      supabase
+        .from('raw_material_transactions')
+        .select('*, raw_materials(product_name)')
+        .order('created_at', { ascending: false })
+        .limit(200),
     ])
 
     setLoading(false)
@@ -568,6 +602,10 @@ function App() {
       setFetchError(rawMatRes.error.message)
       return
     }
+    if (rawMatTxRes.error) {
+      setFetchError(rawMatTxRes.error.message)
+      return
+    }
 
     const racksData = racksRes.data as DbProductRack[]
     const racksByProduct: Record<string, DbProductRack[]> = {}
@@ -581,9 +619,13 @@ function App() {
         toProduct(p, racksByProduct[p.id] ?? []),
       ),
     )
-    setStockUpdates(
-      (txRes.data as unknown as DbTransaction[]).map(toStockUpdate),
-    )
+    const combinedUpdates = [
+      ...(txRes.data as unknown as DbTransaction[]).map(toStockUpdate),
+      ...(rawMatTxRes.data as unknown as DbRawMaterialTransaction[]).map(
+        toRawMaterialStockUpdate,
+      ),
+    ].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    setStockUpdates(combinedUpdates)
     setStaff(staffRes.data as DbStaff[])
     setRawMaterials(
       (rawMatRes.data as DbRawMaterial[]).map(toRawMaterial),
@@ -687,6 +729,7 @@ function App() {
   const [bulkValidating, setBulkValidating] = useState(false)
   const [bulkErrors, setBulkErrors] = useState<string[]>([])
   const [bulkRows, setBulkRows] = useState<BulkRow[] | null>(null)
+  const [rawMaterialBulkRows, setRawMaterialBulkRows] = useState<RawMaterialBulkRow[] | null>(null)
   const [bulkSubmitting, setBulkSubmitting] = useState(false)
   const [bulkModalError, setBulkModalError] = useState('')
   const [bulkSuccess, setBulkSuccess] = useState<BulkSuccess | null>(null)
@@ -695,6 +738,7 @@ function App() {
   const resetBulkModal = () => {
     setBulkErrors([])
     setBulkRows(null)
+    setRawMaterialBulkRows(null)
     setBulkModalError('')
     setBulkValidating(false)
     if (fileInputRef.current) fileInputRef.current.value = ''
@@ -729,6 +773,18 @@ function App() {
     ]
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Stock Update')
+
+    const rmExample =
+      rawMaterials.length > 0
+        ? [rawMaterials[0].productName, 104.235]
+        : ['Sand', 104.235]
+    const rmWs = XLSX.utils.aoa_to_sheet([
+      ['Product Name', 'Length (Meter)'],
+      rmExample,
+    ])
+    rmWs['!cols'] = [{ wch: 28 }, { wch: 16 }]
+    XLSX.utils.book_append_sheet(wb, rmWs, 'Raw Material Update')
+
     XLSX.writeFile(wb, 'parda-bulk-stock-template.xlsx')
   }
 
@@ -751,6 +807,7 @@ function App() {
     setBulkValidating(true)
     setBulkErrors([])
     setBulkRows(null)
+    setRawMaterialBulkRows(null)
     setBulkModalError('')
 
     const reader = new FileReader()
@@ -758,17 +815,22 @@ function App() {
       try {
         const arrayBuffer = evt.target?.result as ArrayBuffer
         const wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' })
-        const sheetName = wb.SheetNames[0]
-        if (!sheetName) {
+        if (wb.SheetNames.length === 0) {
           setBulkErrors(['The uploaded file contains no sheets.'])
           setBulkValidating(false)
           return
         }
-        const ws = wb.Sheets[sheetName]
+
+        const errors: string[] = []
+
+        // ── Sheet 1: product stock update ──────────────────────────────────
+        const productSheetName = wb.SheetNames.includes('Stock Update')
+          ? 'Stock Update'
+          : wb.SheetNames[0]
+        const ws = wb.Sheets[productSheetName]
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const raw: Record<string, any>[] = XLSX.utils.sheet_to_json(ws, { defval: '' })
 
-        const errors: string[] = []
         const validRows: BulkRow[] = []
 
         for (let i = 0; i < raw.length; i++) {
@@ -781,6 +843,8 @@ function App() {
           const quantityRaw = row['Quantity']
           const rackNo = String(row['Rack No'] ?? '').trim()
 
+          if (!name && !size && !type && quantityRaw === '' && !rackNo) continue
+
           const matched = products.find(
             (p) =>
               p.name === name &&
@@ -789,17 +853,17 @@ function App() {
           )
           if (!matched) {
             errors.push(
-              `Row ${spreadsheetRow}: Product not found — "${name} / ${size} / ${type}"`,
+              `Stock Update row ${spreadsheetRow}: Product not found — "${name} / ${size} / ${type}"`,
             )
           }
 
           const qty = Number(quantityRaw)
           if (!Number.isInteger(qty) || qty <= 0) {
-            errors.push(`Row ${spreadsheetRow}: Invalid quantity (must be a positive whole number).`)
+            errors.push(`Stock Update row ${spreadsheetRow}: Invalid quantity (must be a positive whole number).`)
           }
 
           if (!rackNo) {
-            errors.push(`Row ${spreadsheetRow}: Rack No is required.`)
+            errors.push(`Stock Update row ${spreadsheetRow}: Rack No is required.`)
           }
 
           if (matched && Number.isInteger(qty) && qty > 0 && rackNo) {
@@ -814,15 +878,55 @@ function App() {
           }
         }
 
-        if (raw.length === 0) {
+        // ── Sheet 2: raw material bulk update (optional) ───────────────────
+        const rmSheetName = wb.SheetNames.find((n) => n === 'Raw Material Update')
+        const validRmRows: RawMaterialBulkRow[] = []
+
+        if (rmSheetName) {
+          const rmWs = wb.Sheets[rmSheetName]
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const rawRm: Record<string, any>[] = XLSX.utils.sheet_to_json(rmWs, { defval: '' })
+
+          for (let i = 0; i < rawRm.length; i++) {
+            const row = rawRm[i]
+            const spreadsheetRow = i + 2
+
+            const name = String(row['Product Name'] ?? '').trim()
+            const lengthRaw = row['Length (Meter)']
+
+            if (!name && lengthRaw === '') continue
+
+            if (!name) {
+              errors.push(`Raw Material Update row ${spreadsheetRow}: Product Name is required.`)
+              continue
+            }
+
+            const length = Number(lengthRaw)
+            if (!Number.isFinite(length) || length <= 0) {
+              errors.push(`Raw Material Update row ${spreadsheetRow}: Invalid length (must be a positive number).`)
+              continue
+            }
+
+            validRmRows.push({ productName: name, length })
+          }
+        }
+
+        if (raw.length === 0 && validRmRows.length === 0 && !rmSheetName) {
           errors.push('The spreadsheet has no data rows (only a header row or is empty).')
         }
 
         setBulkErrors(errors)
-        setBulkRows(errors.length === 0 ? validRows : null)
+        if (errors.length === 0) {
+          setBulkRows(validRows)
+          setRawMaterialBulkRows(validRmRows)
+        } else {
+          setBulkRows(null)
+          setRawMaterialBulkRows(null)
+        }
       } catch {
         setBulkErrors(['Failed to parse the file. Make sure it is a valid .xlsx/.xls file.'])
         setBulkRows(null)
+        setRawMaterialBulkRows(null)
       } finally {
         setBulkValidating(false)
       }
@@ -835,7 +939,9 @@ function App() {
   }
 
   const handleBulkConfirm = async () => {
-    if (!bulkRows || bulkRows.length === 0) return
+    const productRows = bulkRows ?? []
+    const rmRows = rawMaterialBulkRows ?? []
+    if (productRows.length === 0 && rmRows.length === 0) return
     if (!supabase) {
       setBulkModalError('Supabase client not initialised — check environment variables.')
       return
@@ -844,26 +950,79 @@ function App() {
     setBulkSubmitting(true)
     setBulkModalError('')
 
-    const insertPayload = bulkRows.map((r) => ({
-      product_id: r.productId,
-      rack_number: r.rackNumber,
-      movement_type: 'stock_in' as const,
-      quantity: r.quantity,
-      updated_by: identityName,
-    }))
+    const successItems: string[] = []
 
-    const { error } = await supabase.from('stock_transactions').insert(insertPayload)
-    setBulkSubmitting(false)
+    if (productRows.length > 0) {
+      const insertPayload = productRows.map((r) => ({
+        product_id: r.productId,
+        rack_number: r.rackNumber,
+        movement_type: 'stock_in' as const,
+        quantity: r.quantity,
+        updated_by: identityName,
+      }))
 
-    if (error) {
-      setBulkModalError(error.message)
-      return
+      const { error } = await supabase.from('stock_transactions').insert(insertPayload)
+      if (error) {
+        setBulkSubmitting(false)
+        setBulkModalError(error.message)
+        return
+      }
+      successItems.push(
+        ...productRows.map(
+          (r) => `${r.productName} · ${sizeLabel(r.size)} · ${r.category} — +${r.quantity} to rack ${r.rackNumber}`,
+        ),
+      )
     }
 
-    const successItems = bulkRows.map(
-      (r) => `${r.productName} · ${sizeLabel(r.size)} · ${r.category} — +${r.quantity} to rack ${r.rackNumber}`,
-    )
-    setBulkSuccess({ count: bulkRows.length, items: successItems })
+    if (rmRows.length > 0) {
+      // Dedupe brand-new raw materials within this same submission so the
+      // same not-yet-tracked name isn't created twice.
+      const createdIds = new Map<string, string>()
+
+      for (const row of rmRows) {
+        const targetId =
+          rawMaterials.find((rm) => rm.productName === row.productName)?.id ??
+          createdIds.get(row.productName)
+
+        if (targetId) {
+          const { error } = await supabase.from('raw_material_transactions').insert({
+            raw_material_id: targetId,
+            movement_type: 'stock_in',
+            quantity: row.length,
+            updated_by: identityName,
+          })
+          if (error) {
+            setBulkSubmitting(false)
+            setBulkModalError(`Raw material "${row.productName}": ${error.message}`)
+            return
+          }
+          successItems.push(`${row.productName} — +${row.length} meter`)
+        } else {
+          const { data, error } = await supabase
+            .from('raw_materials')
+            .insert({
+              product_name: row.productName,
+              length_inches: String(row.length),
+              quantity: row.length,
+              updated_by: identityName,
+            })
+            .select('id')
+            .single()
+          if (error || !data) {
+            setBulkSubmitting(false)
+            setBulkModalError(
+              `Raw material "${row.productName}": ${error?.message ?? 'failed to create'}`,
+            )
+            return
+          }
+          createdIds.set(row.productName, data.id as string)
+          successItems.push(`${row.productName} — created with ${row.length} meter`)
+        }
+      }
+    }
+
+    setBulkSubmitting(false)
+    setBulkSuccess({ count: successItems.length, items: successItems })
     closeBulkModal()
     await fetchAll()
   }
@@ -901,6 +1060,26 @@ function App() {
 
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Inventory')
+
+    const rmHeaderRow = ['Product Name', 'Length (Meter)', 'Updated Date', 'Updated By']
+    const rmDataRows = rawMaterials.map((rm) => [
+      rm.productName,
+      rm.quantity,
+      rm.updatedAt,
+      rm.updatedBy,
+    ])
+    const rmColWidths = [
+      Math.max(14, ...rawMaterials.map((rm) => rm.productName.length)) + 2,
+      14,
+      20,
+      16,
+    ]
+    const rmWs = XLSX.utils.aoa_to_sheet([rmHeaderRow, ...rmDataRows])
+    rmWs['!cols'] = rmColWidths.map((wch) => ({ wch }))
+    if (rmWs['!ref']) {
+      rmWs['!autofilter'] = { ref: rmWs['!ref'] }
+    }
+    XLSX.utils.book_append_sheet(wb, rmWs, 'Raw Materials')
 
     const today = new Date().toISOString().slice(0, 10)
     XLSX.writeFile(wb, `parda-inventory-export-${today}.xlsx`)
@@ -1196,7 +1375,7 @@ function App() {
           <Modal title="Bulk Stock Update" onClose={closeBulkModal}>
             <div className="bulk-modal-body">
               <p className="bulk-modal-intro">
-                Download the template, fill in your stock data, then upload the completed file to update stock in one go. All rows are inserted as a single database transaction.
+                Download the template, fill in your stock data, then upload the completed file to update stock in one go. The template has two sheets — "Stock Update" for products and "Raw Material Update" for raw materials — fill in either or both.
               </p>
 
               <div className="bulk-modal-section">
@@ -1240,13 +1419,29 @@ function App() {
                 </div>
               )}
 
-              {bulkRows && bulkErrors.length === 0 && (
+              {bulkRows && bulkRows.length > 0 && bulkErrors.length === 0 && (
                 <div className="bulk-preview" role="status">
-                  <b>{bulkRows.length} {bulkRows.length === 1 ? 'row' : 'rows'} validated successfully.</b>
+                  <b>{bulkRows.length} product {bulkRows.length === 1 ? 'row' : 'rows'} validated successfully.</b>
                   <ul className="bulk-preview-list">
                     {bulkRows.map((r, i) => (
                       <li key={i}>
                         {r.productName} · {sizeLabel(r.size)} · {r.category} — +{r.quantity} to rack {r.rackNumber}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {rawMaterialBulkRows && rawMaterialBulkRows.length > 0 && bulkErrors.length === 0 && (
+                <div className="bulk-preview" role="status">
+                  <b>
+                    {rawMaterialBulkRows.length} raw material {rawMaterialBulkRows.length === 1 ? 'row' : 'rows'}{' '}
+                    validated successfully.
+                  </b>
+                  <ul className="bulk-preview-list">
+                    {rawMaterialBulkRows.map((r, i) => (
+                      <li key={i}>
+                        {r.productName} — +{r.length} meter
                       </li>
                     ))}
                   </ul>
@@ -1272,7 +1467,12 @@ function App() {
                   className="button primary"
                   type="button"
                   onClick={() => { void handleBulkConfirm() }}
-                  disabled={!bulkRows || bulkRows.length === 0 || bulkSubmitting || bulkValidating}
+                  disabled={
+                    (!bulkRows || bulkRows.length === 0) &&
+                    (!rawMaterialBulkRows || rawMaterialBulkRows.length === 0) ||
+                    bulkSubmitting ||
+                    bulkValidating
+                  }
                 >
                   {bulkSubmitting ? 'Updating…' : 'Confirm'}
                 </button>
@@ -3171,8 +3371,8 @@ function AddRawMaterialForm({
       return
     }
     const lengthNum = Number(lengthMeters)
-    if (!lengthMeters || !Number.isInteger(lengthNum) || lengthNum < 1) {
-      onNotice('Length must be a positive whole number (in meters).')
+    if (!lengthMeters || !Number.isFinite(lengthNum) || lengthNum <= 0) {
+      onNotice('Length must be a positive number (in meters).')
       return
     }
 
@@ -3252,11 +3452,11 @@ function AddRawMaterialForm({
               Length (Meter)
               <input
                 type="number"
-                min="1"
-                step="1"
+                min="0.001"
+                step="0.001"
                 value={lengthMeters}
                 onChange={(e) => setLengthMeters(e.target.value)}
-                placeholder="e.g. 55"
+                placeholder="e.g. 104.235"
                 required
               />
             </label>
@@ -3297,7 +3497,7 @@ function RawMaterialAdjustCell({
   const run = async (type: 'stock_in' | 'stock_out') => {
     if (!supabase) return
     const n = Number(qty)
-    if (!Number.isInteger(n) || n <= 0) {
+    if (!Number.isFinite(n) || n <= 0) {
       onNotice('Enter a valid quantity.')
       return
     }
@@ -3329,8 +3529,9 @@ function RawMaterialAdjustCell({
       <input
         className="adjust-input"
         type="number"
-        min="1"
-        inputMode="numeric"
+        min="0.001"
+        step="0.001"
+        inputMode="decimal"
         value={qty}
         onChange={(e) => setQty(e.target.value)}
         disabled={busy}
@@ -3366,6 +3567,8 @@ function RawMaterialAdjustCell({
 
 // ── RawMaterialDetail page ────────────────────────────────────────────────────
 
+const RAW_MATERIAL_LOW_QTY_THRESHOLD = 101
+
 type RawMaterialSortKey = 'productName' | 'updatedAt'
 type SortDir = 'asc' | 'desc'
 
@@ -3383,6 +3586,12 @@ function RawMaterialDetail({
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState<RawMaterialSortKey>('productName')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [lowAlertDismissed, setLowAlertDismissed] = useState(false)
+
+  const lowStockMaterials = useMemo(
+    () => rawMaterials.filter((rm) => rm.quantity < RAW_MATERIAL_LOW_QTY_THRESHOLD),
+    [rawMaterials],
+  )
 
   const handleSort = (key: RawMaterialSortKey) => {
     if (key === sortKey) {
@@ -3420,7 +3629,31 @@ function RawMaterialDetail({
   }
 
   return (
-    <section className="panel products-panel">
+    <>
+      {lowStockMaterials.length > 0 && !lowAlertDismissed && (
+        <div className="low-alert">
+          <div className="alert-icon">!</div>
+          <div>
+            <b>
+              {lowStockMaterials.length}{' '}
+              {lowStockMaterials.length === 1 ? 'raw material is' : 'raw materials are'}{' '}
+              running low
+            </b>
+            <p>
+              Below {RAW_MATERIAL_LOW_QTY_THRESHOLD} meter:{' '}
+              {lowStockMaterials.map((rm) => rm.productName).join(', ')}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setLowAlertDismissed(true)}
+            aria-label="Dismiss low stock alert"
+          >
+            Dismiss <span aria-hidden="true">×</span>
+          </button>
+        </div>
+      )}
+      <section className="panel products-panel">
       <div className="table-tools">
         <label className="search">
           ⌕{' '}
@@ -3503,7 +3736,8 @@ function RawMaterialDetail({
           </tbody>
         </table>
       </div>
-    </section>
+      </section>
+    </>
   )
 }
 
@@ -3918,6 +4152,11 @@ type BulkRow = {
   rackNumber: string
 }
 
+type RawMaterialBulkRow = {
+  productName: string
+  length: number
+}
+
 type BulkSuccess = {
   count: number
   items: string[]
@@ -4057,10 +4296,14 @@ function History({ stockUpdates }: { stockUpdates: StockUpdate[] }) {
                   </span>
                 </td>
                 <td data-label="Quantity">
-                  <b>{m.quantity}</b>
+                  <b>{m.source === 'raw_material' ? lengthLabel(String(m.quantity)) : m.quantity}</b>
                 </td>
                 <td data-label="Rack">
-                  <code>{m.rack}</code>
+                  {m.source === 'raw_material' ? (
+                    <span className="type-pill">Raw Material</span>
+                  ) : (
+                    <code>{m.rack}</code>
+                  )}
                 </td>
                 <td data-label="Updated by">{m.by}</td>
               </tr>
