@@ -858,15 +858,15 @@ function App() {
           }
 
           const qty = Number(quantityRaw)
-          if (!Number.isInteger(qty) || qty <= 0) {
-            errors.push(`Stock Update row ${spreadsheetRow}: Invalid quantity (must be a positive whole number).`)
+          if (!Number.isFinite(qty) || qty <= 0) {
+            errors.push(`Stock Update row ${spreadsheetRow}: Invalid quantity (must be a positive number).`)
           }
 
           if (!rackNo) {
             errors.push(`Stock Update row ${spreadsheetRow}: Rack No is required.`)
           }
 
-          if (matched && Number.isInteger(qty) && qty > 0 && rackNo) {
+          if (matched && Number.isFinite(qty) && qty > 0 && rackNo) {
             validRows.push({
               productId: matched.id,
               productName: matched.name,
@@ -1876,6 +1876,7 @@ function AddProductPage({
                 name="opening_qty"
                 type="number"
                 min="0"
+                step="0.001"
                 defaultValue="0"
                 required
               />
@@ -2140,7 +2141,7 @@ function RackAdjustCell({
   const run = async (type: 'stock_in' | 'stock_out') => {
     if (!supabase) return
     const n = Number(qty)
-    if (!Number.isInteger(n) || n <= 0) {
+    if (!Number.isFinite(n) || n <= 0) {
       onNotice('Enter a valid quantity.')
       return
     }
@@ -2173,8 +2174,9 @@ function RackAdjustCell({
       <input
         className="adjust-input"
         type="number"
-        min="1"
-        inputMode="numeric"
+        min="0.001"
+        step="0.001"
+        inputMode="decimal"
         value={qty}
         onChange={(e) => setQty(e.target.value)}
         disabled={busy}
@@ -2910,7 +2912,7 @@ function StockInForm({
       onNotice('Enter or select a rack number.')
       return
     }
-    if (!Number.isInteger(quantity) || quantity <= 0) {
+    if (!Number.isFinite(quantity) || quantity <= 0) {
       onNotice('Enter a valid quantity.')
       return
     }
@@ -3040,7 +3042,7 @@ function StockInForm({
             </label>
             <label>
               Quantity
-              <input name="quantity" type="number" min="1" required />
+              <input name="quantity" type="number" min="0.001" step="0.001" required />
             </label>
           </div>
 
@@ -3189,7 +3191,7 @@ function StockOutForm({
       onNotice('Select a rack.')
       return
     }
-    if (!Number.isInteger(quantity) || quantity <= 0) {
+    if (!Number.isFinite(quantity) || quantity <= 0) {
       onNotice('Enter a valid quantity.')
       return
     }
@@ -3298,7 +3300,8 @@ function StockOutForm({
               <input
                 name="quantity"
                 type="number"
-                min="1"
+                min="0.001"
+                step="0.001"
                 max={availableQty > 0 ? availableQty : undefined}
                 required
                 disabled={!hasStock || !selectedRackNumber}
@@ -3899,8 +3902,8 @@ function ReturnedStockPage({
       }
 
       const qty = Number(row.quantity)
-      if (!Number.isInteger(qty) || qty <= 0) {
-        rowErrors.push(`Row ${rowNum}: enter a valid quantity (positive whole number).`)
+      if (!Number.isFinite(qty) || qty <= 0) {
+        rowErrors.push(`Row ${rowNum}: enter a valid quantity (positive number).`)
         return
       }
 
@@ -4053,8 +4056,8 @@ function ReturnedStockPage({
               <div className="returned-stock-cell">
                 <input
                   type="number"
-                  min="1"
-                  step="1"
+                  min="0.001"
+                  step="0.001"
                   className="returned-stock-qty"
                   value={row.quantity}
                   onChange={(e) => updateRow(row.id, { quantity: e.target.value })}
