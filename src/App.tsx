@@ -845,17 +845,17 @@ function App() {
 
           if (!name && !size && !type && quantityRaw === '' && !rackNo) continue
 
+          if (!name || !size || !type) {
+            errors.push(`Stock Update row ${spreadsheetRow}: Product Name, Size, and Type are required.`)
+            continue
+          }
+
           const matched = products.find(
             (p) =>
               p.name === name &&
               String(p.size).trim() === size &&
               p.category === type,
           )
-          if (!matched) {
-            errors.push(
-              `Stock Update row ${spreadsheetRow}: Product not found — "${name} / ${size} / ${type}"`,
-            )
-          }
 
           const qty = Number(quantityRaw)
           if (!Number.isInteger(qty) || qty <= 0) {
@@ -866,12 +866,13 @@ function App() {
             errors.push(`Stock Update row ${spreadsheetRow}: Rack No is required.`)
           }
 
-          if (matched && Number.isInteger(qty) && qty > 0 && rackNo) {
+          if (Number.isInteger(qty) && qty > 0 && rackNo) {
+            // Not yet a real product — created on confirm, same as Stock In.
             validRows.push({
-              productId: matched.id,
-              productName: matched.name,
-              size: matched.size,
-              category: matched.category,
+              productId: matched?.id ?? null,
+              productName: name,
+              size,
+              category: type,
               quantity: qty,
               rackNumber: rackNo,
             })
@@ -953,8 +954,41 @@ function App() {
     const successItems: string[] = []
 
     if (productRows.length > 0) {
+      // Resolve a product id for every row, creating the product first when
+      // its Name+Size+Type combo doesn't exist yet — same "add on the fly"
+      // behavior as Stock In. Dedupe new combos within this submission.
+      const createdProductIds = new Map<string, string>()
+      const comboKey = (name: string, size: string, category: string) =>
+        `${name} ${size} ${category}`
+
+      for (const row of productRows) {
+        if (row.productId) continue
+        const key = comboKey(row.productName, row.size, row.category)
+        if (createdProductIds.has(key)) continue
+
+        const { data, error: createError } = await supabase
+          .from('products')
+          .insert({
+            name: row.productName,
+            size: row.size,
+            category: row.category,
+            updated_by: identityName,
+          })
+          .select('id')
+          .single()
+
+        if (createError || !data) {
+          setBulkSubmitting(false)
+          setBulkModalError(
+            `Failed to create product "${row.productName} · ${sizeLabel(row.size)} · ${row.category}": ${createError?.message ?? 'unknown error'}`,
+          )
+          return
+        }
+        createdProductIds.set(key, data.id as string)
+      }
+
       const insertPayload = productRows.map((r) => ({
-        product_id: r.productId,
+        product_id: r.productId ?? createdProductIds.get(comboKey(r.productName, r.size, r.category))!,
         rack_number: r.rackNumber,
         movement_type: 'stock_in' as const,
         quantity: r.quantity,
@@ -4144,7 +4178,9 @@ function ReturnedStockPage({
 // ── Products page ──────────────────────────────────────────────────────────────
 
 type BulkRow = {
-  productId: string
+  // null when this Name+Size+Type combo doesn't exist yet — created on
+  // confirm, same "add on the fly" behavior as Stock In.
+  productId: string | null
   productName: string
   size: string
   category: string
