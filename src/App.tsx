@@ -13,6 +13,30 @@ import * as XLSX from 'xlsx'
 import { supabase } from './lib/supabase'
 import './App.css'
 
+// Supabase/PostgREST caps any unpaginated select at 1000 rows. Tables that
+// can grow past that (products, product_racks) must be fetched page by page
+// with a unique tiebreaker column, or rows silently go missing client-side.
+const FETCH_PAGE_SIZE = 1000
+
+async function fetchAllPages<T>(
+  page: (
+    from: number,
+    to: number,
+  ) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+): Promise<{ data: T[] | null; error: { message: string } | null }> {
+  let rows: T[] = []
+  let from = 0
+  while (true) {
+    const { data, error } = await page(from, from + FETCH_PAGE_SIZE - 1)
+    if (error) return { data: null, error }
+    if (!data || data.length === 0) break
+    rows = rows.concat(data)
+    if (data.length < FETCH_PAGE_SIZE) break
+    from += FETCH_PAGE_SIZE
+  }
+  return { data: rows, error: null }
+}
+
 // ── DB row shapes ──────────────────────────────────────────────────────────────
 
 type DbRawMaterial = {
@@ -555,17 +579,29 @@ function App() {
 
   const fetchAll = async () => {
     if (!supabase || !session) return
+    const client = supabase
     setLoading(true)
     setFetchError('')
 
     const [prodRes, racksRes, txRes, staffRes, rawMatRes, rawMatTxRes] = await Promise.all([
-      supabase
-        .from('products')
-        .select('*')
-        .order('name')
-        .order('size')
-        .order('category'),
-      supabase.from('product_racks').select('*').order('rack_number'),
+      fetchAllPages<DbProduct>((from, to) =>
+        client
+          .from('products')
+          .select('*')
+          .order('name')
+          .order('size')
+          .order('category')
+          .order('id')
+          .range(from, to),
+      ),
+      fetchAllPages<DbProductRack>((from, to) =>
+        client
+          .from('product_racks')
+          .select('*')
+          .order('rack_number')
+          .order('id')
+          .range(from, to),
+      ),
       supabase
         .from('stock_transactions')
         .select('*, products(name, size, category)')
@@ -858,16 +894,22 @@ function App() {
           )
 
           const qty = Number(quantityRaw)
-          if (!Number.isInteger(qty) || qty <= 0) {
-            errors.push(`Stock Update row ${spreadsheetRow}: Invalid quantity (must be a positive whole number).`)
+          if (!Number.isInteger(qty) || qty === 0) {
+            errors.push(`Stock Update row ${spreadsheetRow}: Invalid quantity (must be a non-zero whole number — negative stocks out).`)
           }
 
           if (!rackNo) {
             errors.push(`Stock Update row ${spreadsheetRow}: Rack No is required.`)
           }
 
-          if (Number.isInteger(qty) && qty > 0 && rackNo) {
-            // Not yet a real product — created on confirm, same as Stock In.
+          if (Number.isInteger(qty) && qty < 0 && !matched) {
+            errors.push(`Stock Update row ${spreadsheetRow}: Product not found — can't stock out a product that doesn't exist yet.`)
+          }
+
+          if (Number.isInteger(qty) && qty !== 0 && rackNo && (qty > 0 || matched)) {
+            // Positive quantity: not yet a real product is fine — created on
+            // confirm, same as Stock In. Negative quantity (stock out)
+            // requires an existing product, enforced above.
             validRows.push({
               productId: matched?.id ?? null,
               productName: name,
@@ -903,8 +945,13 @@ function App() {
             }
 
             const length = Number(lengthRaw)
-            if (!Number.isFinite(length) || length <= 0) {
-              errors.push(`Raw Material Update row ${spreadsheetRow}: Invalid length (must be a positive number).`)
+            if (!Number.isFinite(length) || length === 0) {
+              errors.push(`Raw Material Update row ${spreadsheetRow}: Invalid length (must be a non-zero number — negative stocks out).`)
+              continue
+            }
+
+            if (length < 0 && !rawMaterials.some((rm) => rm.productName === name)) {
+              errors.push(`Raw Material Update row ${spreadsheetRow}: Raw material not found — can't stock out a material that doesn't exist yet.`)
               continue
             }
 
@@ -990,8 +1037,8 @@ function App() {
       const insertPayload = productRows.map((r) => ({
         product_id: r.productId ?? createdProductIds.get(comboKey(r.productName, r.size, r.category))!,
         rack_number: r.rackNumber,
-        movement_type: 'stock_in' as const,
-        quantity: r.quantity,
+        movement_type: (r.quantity < 0 ? 'stock_out' : 'stock_in') as 'stock_out' | 'stock_in',
+        quantity: Math.abs(r.quantity),
         updated_by: identityName,
       }))
 
@@ -1003,7 +1050,8 @@ function App() {
       }
       successItems.push(
         ...productRows.map(
-          (r) => `${r.productName} · ${sizeLabel(r.size)} · ${r.category} — +${r.quantity} to rack ${r.rackNumber}`,
+          (r) =>
+            `${r.productName} · ${sizeLabel(r.size)} · ${r.category} — ${r.quantity < 0 ? r.quantity + ' from' : '+' + r.quantity + ' to'} rack ${r.rackNumber}`,
         ),
       )
     }
@@ -1021,8 +1069,8 @@ function App() {
         if (targetId) {
           const { error } = await supabase.from('raw_material_transactions').insert({
             raw_material_id: targetId,
-            movement_type: 'stock_in',
-            quantity: row.length,
+            movement_type: row.length < 0 ? 'stock_out' : 'stock_in',
+            quantity: Math.abs(row.length),
             updated_by: identityName,
           })
           if (error) {
@@ -1030,7 +1078,9 @@ function App() {
             setBulkModalError(`Raw material "${row.productName}": ${error.message}`)
             return
           }
-          successItems.push(`${row.productName} — +${row.length} meter`)
+          successItems.push(
+            `${row.productName} — ${row.length < 0 ? row.length + ' meter (stock out)' : '+' + row.length + ' meter'}`,
+          )
         } else {
           const { data, error } = await supabase
             .from('raw_materials')
@@ -1409,7 +1459,7 @@ function App() {
           <Modal title="Bulk Stock Update" onClose={closeBulkModal}>
             <div className="bulk-modal-body">
               <p className="bulk-modal-intro">
-                Download the template, fill in your stock data, then upload the completed file to update stock in one go. The template has two sheets — "Stock Update" for products and "Raw Material Update" for raw materials — fill in either or both.
+                Download the template, fill in your stock data, then upload the completed file to update stock in one go. The template has two sheets — "Stock Update" for products and "Raw Material Update" for raw materials — fill in either or both. Use a positive quantity to stock in, or a negative quantity (e.g. -2) to stock out / bulk-remove.
               </p>
 
               <div className="bulk-modal-section">
@@ -1459,7 +1509,8 @@ function App() {
                   <ul className="bulk-preview-list">
                     {bulkRows.map((r, i) => (
                       <li key={i}>
-                        {r.productName} · {sizeLabel(r.size)} · {r.category} — +{r.quantity} to rack {r.rackNumber}
+                        {r.productName} · {sizeLabel(r.size)} · {r.category} —{' '}
+                        {r.quantity < 0 ? `${r.quantity} from` : `+${r.quantity} to`} rack {r.rackNumber}
                       </li>
                     ))}
                   </ul>
@@ -1475,7 +1526,7 @@ function App() {
                   <ul className="bulk-preview-list">
                     {rawMaterialBulkRows.map((r, i) => (
                       <li key={i}>
-                        {r.productName} — +{r.length} meter
+                        {r.productName} — {r.length < 0 ? `${r.length} meter (stock out)` : `+${r.length} meter`}
                       </li>
                     ))}
                   </ul>
@@ -1575,6 +1626,13 @@ function AllProductsPage({
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [search, setSearch] = useState('')
+
+  const filtered = products.filter((p) =>
+    `${p.name} ${p.size} ${p.category}`
+      .toLowerCase()
+      .includes(search.toLowerCase()),
+  )
 
   const openEdit = (p: Product) => {
     setDraft({ name: p.name, size: p.size, category: p.category })
@@ -1671,8 +1729,15 @@ function AllProductsPage({
   return (
     <section className="panel products-panel">
       <div className="table-tools">
-        <b>All products</b>
-        <span>{products.length} products</span>
+        <label className="search">
+          ⌕{' '}
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search name, size or type"
+          />
+        </label>
+        <span>{filtered.length} products</span>
       </div>
       <div className="table-wrap">
         <table>
@@ -1687,7 +1752,7 @@ function AllProductsPage({
             </tr>
           </thead>
           <tbody>
-            {products.map((p) => (
+            {filtered.map((p) => (
               <tr key={p.id}>
                 <td data-label="Product name">
                   <b>{p.name}</b>
@@ -1718,7 +1783,7 @@ function AllProductsPage({
                 </td>
               </tr>
             ))}
-            {products.length === 0 && (
+            {filtered.length === 0 && (
               <tr>
                 <td
                   colSpan={6}
@@ -4184,12 +4249,14 @@ type BulkRow = {
   productName: string
   size: string
   category: string
+  // Signed: positive stocks in, negative stocks out.
   quantity: number
   rackNumber: string
 }
 
 type RawMaterialBulkRow = {
   productName: string
+  // Signed: positive stocks in, negative stocks out.
   length: number
 }
 
@@ -4299,11 +4366,26 @@ function Products({
 // ── History page ───────────────────────────────────────────────────────────────
 
 function History({ stockUpdates }: { stockUpdates: StockUpdate[] }) {
+  const [search, setSearch] = useState('')
+
+  const filtered = stockUpdates.filter((m) =>
+    `${m.product} ${m.rack} ${m.type} ${m.by}`
+      .toLowerCase()
+      .includes(search.toLowerCase()),
+  )
+
   return (
     <section className="panel products-panel">
       <div className="table-tools">
-        <b>All stock updates</b>
-        <span>{stockUpdates.length} records</span>
+        <label className="search">
+          ⌕{' '}
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search product, rack, type or staff"
+          />
+        </label>
+        <span>{filtered.length} records</span>
       </div>
       <div className="table-wrap">
         <table>
@@ -4318,7 +4400,7 @@ function History({ stockUpdates }: { stockUpdates: StockUpdate[] }) {
             </tr>
           </thead>
           <tbody>
-            {stockUpdates.map((m) => (
+            {filtered.map((m) => (
               <tr key={m.id}>
                 <td data-label="Date & time">{m.date}</td>
                 <td data-label="Product">
@@ -4344,7 +4426,7 @@ function History({ stockUpdates }: { stockUpdates: StockUpdate[] }) {
                 <td data-label="Updated by">{m.by}</td>
               </tr>
             ))}
-            {stockUpdates.length === 0 && (
+            {filtered.length === 0 && (
               <tr>
                 <td
                   colSpan={6}
@@ -4354,7 +4436,7 @@ function History({ stockUpdates }: { stockUpdates: StockUpdate[] }) {
                     padding: '28px',
                   }}
                 >
-                  No stock updates yet.
+                  No stock updates found.
                 </td>
               </tr>
             )}
