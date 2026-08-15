@@ -1627,12 +1627,69 @@ function AllProductsPage({
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [search, setSearch] = useState('')
+  const [filterName, setFilterName] = useState('')
+  const [filterSize, setFilterSize] = useState('')
+  const [filterQty, setFilterQty] = useState('')
 
-  const filtered = products.filter((p) =>
-    `${p.name} ${p.size} ${p.category}`
-      .toLowerCase()
-      .includes(search.toLowerCase()),
-  )
+  // Distinct filter options — independent of each other, derived from all products
+  const nameFilterOptions = useMemo<SearchableSelectOption[]>(() => {
+    const seen = new Set<string>()
+    const opts: SearchableSelectOption[] = [{ value: '', label: 'All Names' }]
+    for (const p of products) {
+      if (!seen.has(p.name)) {
+        seen.add(p.name)
+        opts.push({ value: p.name, label: p.name })
+      }
+    }
+    return opts
+  }, [products])
+
+  const sizeFilterOptions = useMemo<SearchableSelectOption[]>(() => {
+    const seen = new Set<string>()
+    const opts: SearchableSelectOption[] = [{ value: '', label: 'All Sizes' }]
+    for (const p of products) {
+      if (!seen.has(p.size)) {
+        seen.add(p.size)
+        opts.push({ value: p.size, label: sizeLabel(p.size) })
+      }
+    }
+    return opts
+  }, [products])
+
+  const qtyFilterOptions = useMemo<SearchableSelectOption[]>(() => {
+    const seen = new Set<number>()
+    for (const p of products) seen.add(p.quantity)
+    const opts: SearchableSelectOption[] = [{ value: '', label: 'All Quantities' }]
+    for (const q of [...seen].sort((a, b) => a - b)) {
+      opts.push({ value: String(q), label: String(q) })
+    }
+    return opts
+  }, [products])
+
+  const filtered = products.filter((p) => {
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      if (
+        !`${p.name} ${p.size} ${p.category}`.toLowerCase().includes(q)
+      ) {
+        return false
+      }
+    }
+    if (filterName && p.name !== filterName) return false
+    if (filterSize && p.size !== filterSize) return false
+    if (filterQty && String(p.quantity) !== filterQty) return false
+    return true
+  })
+
+  const hasActiveFilters =
+    search.trim() !== '' || filterName !== '' || filterSize !== '' || filterQty !== ''
+
+  const clearFilters = () => {
+    setSearch('')
+    setFilterName('')
+    setFilterSize('')
+    setFilterQty('')
+  }
 
   const openEdit = (p: Product) => {
     setDraft({ name: p.name, size: p.size, category: p.category })
@@ -1728,16 +1785,61 @@ function AllProductsPage({
 
   return (
     <section className="panel products-panel">
-      <div className="table-tools">
-        <label className="search">
-          ⌕{' '}
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search name, size or type"
-          />
-        </label>
-        <span>{filtered.length} products</span>
+      <div className="table-tools dash-table-tools">
+        <div className="dash-filters">
+          <label className="search">
+            ⌕{' '}
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search name, size or type"
+            />
+          </label>
+          <div className="dash-filter-dropdowns">
+            <label className="dash-filter-label">
+              Product Name
+              <SearchableSelect
+                id="all-products-filter-name"
+                placeholder="All Names"
+                options={nameFilterOptions}
+                value={filterName}
+                onChange={setFilterName}
+              />
+            </label>
+            <label className="dash-filter-label">
+              Size
+              <SearchableSelect
+                id="all-products-filter-size"
+                placeholder="All Sizes"
+                options={sizeFilterOptions}
+                value={filterSize}
+                onChange={setFilterSize}
+              />
+            </label>
+            <label className="dash-filter-label">
+              Quantity
+              <SearchableSelect
+                id="all-products-filter-qty"
+                placeholder="All Quantities"
+                options={qtyFilterOptions}
+                value={filterQty}
+                onChange={setFilterQty}
+              />
+            </label>
+          </div>
+        </div>
+        <div className="dash-tools-right">
+          <span>{filtered.length} products</span>
+          {hasActiveFilters && (
+            <button
+              className="text-button dash-clear-filters"
+              type="button"
+              onClick={clearFilters}
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
       </div>
       <div className="table-wrap">
         <table>
